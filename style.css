@@ -1,0 +1,156 @@
+/* ============================================================
+   سجل المعاملات — الأنماط
+   ============================================================ */
+
+/* ---------- المتغيرات (الوضع الفاتح افتراضيًا) ---------- */
+:root{
+  --bg:#eef2f1;
+  --card:#fff;
+  --ink:#12302f;
+  --muted:#5f7271;
+  --brand:#0f4c4a;
+  --onbrand:#fff;
+  --border:#d1d9d8;
+  --danger:#c0392b;
+  --ok:#26734a;
+  --tint:#e2ecea;
+}
+
+/* ---------- الوضع الليلي (تلقائيًا حسب النظام) ---------- */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1a1a; --card:#162626; --ink:#e6f0ef; --muted:#9ab0af;
+    --brand:#4fb3a9; --onbrand:#06201f; --border:#2a3d3c;
+    --danger:#e57373; --ok:#66bb6a; --tint:#1d3333;
+  }
+}
+/* ---------- الوضع الليلي (يدويًا) ---------- */
+:root[data-theme="dark"]{
+  --bg:#0e1a1a; --card:#162626; --ink:#e6f0ef; --muted:#9ab0af;
+  --brand:#4fb3a9; --onbrand:#06201f; --border:#2a3d3c;
+  --danger:#e57373; --ok:#66bb6a; --tint:#1d3333;
+}
+
+/* ---------- أساسيات ---------- */
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{
+  margin:0;
+  font-family:'Tajawal',Tahoma,sans-serif;
+  background:var(--bg);
+  color:var(--ink);
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  min-height:100vh;
+}
+
+/* ---------- الحاوية ---------- */
+.app{max-width:600px;margin:0 auto;padding:15px 15px 40px}
+
+header{
+  display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:16px;padding-bottom:10px;
+  border-bottom:1px solid var(--border);
+}
+h1{font-size:20px;margin:0;color:var(--brand)}
+
+/* ---------- الأزرار ---------- */
+button{
+  font-family:inherit;cursor:pointer;border:none;
+  border-radius:8px;padding:10px 15px;
+  font-size:14px;font-weight:500;
+  transition:opacity .15s;
+}
+button:active{opacity:.7}
+:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+
+.p{background:var(--brand);color:var(--onbrand)}
+.o{background:transparent;border:1px solid var(--brand);color:var(--brand)}
+.d{background:var(--danger);color:#fff}
+.g{background:transparent;border:1px solid var(--border);color:var(--ink)}
+.sm{padding:6px 12px;font-size:12px}
+
+/* ---------- الحقول ---------- */
+input,select{
+  width:100%;padding:10px;margin-bottom:10px;
+  border:1px solid var(--border);border-radius:8px;
+  background:var(--card);color:var(--ink);
+  font-family:inherit;font-size:15px;
+}
+label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+
+/* ---------- الصناديق ---------- */
+.box{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:15px;margin-bottom:14px}
+.box h3{margin:0 0 10px;font-size:15px}
+
+/* ---------- بطاقة الملخص ---------- */
+.sum{background:var(--brand);color:var(--onbrand);border-radius:14px;padding:16px;margin-bottom:14px}
+.sum .big{font-size:30px;font-weight:700;line-height:1.2}
+.sum small{opacity:.85}
+
+/* ---------- الصفوف ---------- */
+.row{display:flex;gap:10px;align-items:center}
+
+/* ---------- بطاقة المشتري ---------- */
+.cust{
+  background:var(--card);border:1px solid var(--border);border-radius:10px;
+  padding:14px;margin-bottom:10px;
+  display:flex;justify-content:space-between;align-items:center;gap:8px;
+}
+.cust .nm{font-weight:700;font-size:16px}
+.cust small{color:var(--muted);font-size:12px}
+.bal{font-weight:700;text-align:end;white-space:nowrap}
+.bal.z{color:var(--ok)}
+.bal small{display:block;font-weight:400}
+
+/* ---------- الجداول ---------- */
+.tw{overflow-x:auto;border:1px solid var(--border);border-radius:8px;background:var(--card)}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:480px}
+th,td{padding:10px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:start}
+th{background:var(--brand);color:var(--onbrand);font-weight:500}
+tr:last-child td{border-bottom:none}
+.amt-d{color:var(--danger);font-weight:700}
+.amt-p{color:var(--ok);font-weight:700}
+.acts button{padding:3px 8px;font-size:12px;margin-inline-end:4px}
+
+/* ---------- المجموعات (Segmented) ---------- */
+.seg{display:flex;gap:8px;margin-bottom:10px}
+.seg button{flex:1;background:var(--card);border:1px solid var(--border);color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--brand);color:var(--onbrand);border-color:var(--brand)}
+
+/* ---------- الحالة الفارغة ---------- */
+.empty{text-align:center;padding:28px;color:var(--muted)}
+
+/* ---------- النوافذ المنبثقة ---------- */
+.modal{
+  position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;
+  display:flex;justify-content:center;align-items:center;padding:15px;
+}
+.mc{
+  background:var(--card);padding:20px;border-radius:12px;
+  max-width:380px;width:100%;max-height:90vh;overflow:auto;
+}
+.mc h3{margin:0 0 10px;color:var(--brand)}
+.mc textarea{
+  width:100%;min-height:120px;border:1px solid var(--border);border-radius:8px;
+  background:var(--bg);color:var(--ink);padding:8px;font-size:12px;direction:ltr;
+}
+
+/* ---------- QR ---------- */
+.qr{background:#fff;padding:12px;border-radius:8px;display:inline-block;margin:10px 0}
+.qr img{display:block}
+
+/* ---------- ملاحظات ---------- */
+.note{font-size:12px;color:var(--muted)}
+
+/* ---------- التنبيهات العائمة ---------- */
+.toast{
+  position:fixed;inset-inline:16px;
+  bottom:calc(20px + env(safe-area-inset-bottom,0px));
+  max-width:400px;margin:0 auto;
+  background:var(--ink);color:var(--bg);
+  padding:10px 14px;border-radius:10px;z-index:60;text-align:center;
+}
+
+/* ---------- أدوات ---------- */
+.hide{display:none !important}

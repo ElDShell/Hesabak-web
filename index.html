@@ -3,12 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0f4c4a">
     <title>سجل المعاملات</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
 
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    Hello World!
+
+    <div class="app">
+        <header>
+            <h1>سجل المعاملات</h1>
+            <div class="row">
+            <button class="g sm" id="bk" type="button">نسخة احتياطية</button>
+            <button class="g sm" id="th" type="button" aria-label="تبديل الوضع الليلي">🌓</button>
+            </div>
+        </header>
+
+    <main id="v"></main>
+    </div>
+
+    <div id="m" class="hide"></div>
+    <div id="t" class="toast hide" role="status" aria-live="polite"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
