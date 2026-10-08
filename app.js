@@ -1,6 +1,7 @@
 /* ============================================================
    سجل المعاملات — منطق التطبيق
-   الإصدار 9 — اسم مشروع قابل للتعديل + Excel فقط
+   الإصدار 10 — اسم مشروع قابل للتعديل + Excel فقط
+               + نسخة احتياطية تلقائية كل 5 ساعات (ملف واحد)
    ============================================================ */
 (function () {
 'use strict';
@@ -239,7 +240,7 @@ function entryHtml(c, p) {
     ? '<div class="chips">' + r.map(d =>
         '<button type="button" class="chip" data-chip="' + esc(d) + '">' + esc(d) + '</button>').join('') + '</div>'
     : '';
-  const n = nowParts();   // القيم الافتراضية: التاريخ والوقت الحاليان
+  const n = nowParts();
   return `
     <div class="entry" data-type="${type}">
       <div class="tg" role="group" aria-label="نوع الحركة">
@@ -288,7 +289,7 @@ function wireEntry(c, p, onDone) {
   const submit = () => {
     const a = parseFloat(am.value);
     if (!(a > 0)) { toast('أدخل مبلغًا أكبر من صفر'); am.focus(); return; }
-    const n = nowParts();               // قيمة احتياطية إن كان أحد الحقلين فارغًا
+    const n = nowParts();
     const tx = {
       id: uid(),
       type,
@@ -306,7 +307,6 @@ function wireEntry(c, p, onDone) {
   am.oninput = paint;
   sb.onclick = submit;
 
-  // Enter في أي من الحقول يُرسل
   [am, ds, dt, tm].forEach(el => {
     if (el) el.onkeydown = e => {
       if (e.key === 'Enter') { e.preventDefault(); submit(); }
@@ -1006,7 +1006,7 @@ async function showLedgerImage(id) {
       }
       toast('المشاركة غير مدعومة على هذا الجهاز');
     } catch (e) {
-      // المستخدم ألغى
+      /* المستخدم ألغى */
     }
   };
 
@@ -1030,7 +1030,7 @@ async function showLedgerImage(id) {
    10) تصدير تقرير Excel — XLSX حقيقي (Office Open XML)
    ------------------------------------------------------------ */
 
-/* جدول CRC32 — يُحسب مرة واحدة عند تحميل السكربت */
+/* جدول CRC32 */
 const CRC_TABLE = (function () {
   const t = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -1049,7 +1049,7 @@ function crc32(bytes) {
   return (c ^ 0xFFFFFFFF) >>> 0;
 }
 
-/* بناء ملف ZIP بحيث يحتوي على الملفات المعطاة، بدون ضغط (STORED) */
+/* ZIP بدون ضغط (STORED) */
 function makeZip(files) {
   const enc = new TextEncoder();
   const chunks = [];
@@ -1061,13 +1061,12 @@ function makeZip(files) {
     const data = (f.data instanceof Uint8Array) ? f.data : enc.encode(f.data);
     const crc = crc32(data);
 
-    /* Local file header */
     const lh = new Uint8Array(30 + nameBytes.length);
     const lv = new DataView(lh.buffer);
     lv.setUint32(0, 0x04034b50, true);
     lv.setUint16(4, 20, true);
-    lv.setUint16(6, 0x0800, true);  // UTF-8
-    lv.setUint16(8, 0, true);        // STORED
+    lv.setUint16(6, 0x0800, true);
+    lv.setUint16(8, 0, true);
     lv.setUint16(10, 0, true);
     lv.setUint16(12, 0x21, true);
     lv.setUint32(14, crc, true);
@@ -1079,7 +1078,6 @@ function makeZip(files) {
     chunks.push(lh);
     chunks.push(data);
 
-    /* Central directory header */
     const ch = new Uint8Array(46 + nameBytes.length);
     const cv = new DataView(ch.buffer);
     cv.setUint32(0, 0x02014b50, true);
@@ -1127,8 +1125,11 @@ function makeZip(files) {
   return out;
 }
 
-function exportExcel() {
-  if (!customers.length) { toast('لا يوجد مشترون للتصدير'); return; }
+/* ----------------------------------------------
+   بناء ملف Excel كـ bytes (بدون تنزيل)
+   ---------------------------------------------- */
+function buildExcelBytes() {
+  if (!customers.length) return null;
 
   const reportDate = nowParts().date;
 
@@ -1213,7 +1214,7 @@ function exportExcel() {
     cNum('G' + totalRow, 9, totalCredit) +
     '</row>');
 
-  /* --- الأوراق الثلاث عشرة (المكوّنات) --- */
+  /* --- XML --- */
   const sheetXml =
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
@@ -1311,30 +1312,33 @@ function exportExcel() {
     '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
     '</Relationships>';
 
-  /* --- تجميع الملف --- */
-  const zipBytes = makeZip([
-    { name: '[Content_Types].xml',      data: contentTypes },
-    { name: '_rels/.rels',              data: rootRels },
-    { name: 'xl/workbook.xml',          data: workbookXml },
-    { name: 'xl/_rels/workbook.xml.rels', data: workbookRels },
-    { name: 'xl/styles.xml',            data: stylesXml },
-    { name: 'xl/worksheets/sheet1.xml', data: sheetXml }
+  return makeZip([
+    { name: '[Content_Types].xml',         data: contentTypes },
+    { name: '_rels/.rels',                 data: rootRels },
+    { name: 'xl/workbook.xml',             data: workbookXml },
+    { name: 'xl/_rels/workbook.xml.rels',  data: workbookRels },
+    { name: 'xl/styles.xml',               data: stylesXml },
+    { name: 'xl/worksheets/sheet1.xml',    data: sheetXml }
   ]);
+}
 
-  /* --- التنزيل --- */
-  const blob = new Blob([zipBytes], {
+/* ----------------------------------------------
+   تصدير يدوي (يستخدم نفس ملف النسخة)
+   ---------------------------------------------- */
+async function exportExcel() {
+  const bytes = buildExcelBytes();
+  if (!bytes) { toast('لا يوجد مشترون للتصدير'); return; }
+
+  const blob = new Blob([bytes], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  const safeName = projectName.replace(/[\\/:*?"<>|]/g, '').trim() || 'المعاملات';
-  a.href = url;
-  a.download = 'تقرير-' + safeName + '-' + reportDate + '.xlsx';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 3000);
+
+  const mode = await saveBackupBlob(blob);
+  if (mode === 'aborted')  { toast('تم إلغاء الحفظ'); return; }
+  if (mode === 'native')   { toast('تم حفظ التقرير في مجلد LedgerBackups'); markBackupDone(); return; }
+  if (mode === 'fs')       { toast('تم حفظ تقرير Excel'); markBackupDone(); return; }
   toast('تم تنزيل تقرير Excel');
+  markBackupDone();
 }
 
 /* ------------------------------------------------------------
@@ -1387,18 +1391,30 @@ function setupProjectName() {
 }
 
 /* ------------------------------------------------------------
-   10.7) نافذة النسخة الاحتياطية
+   10.7) نافذة النسخة الاحتياطية (زر)
    ------------------------------------------------------------ */
 function setupBackup() {
   $('bk').onclick = () => {
+    const last = lastBackupTs();
+    const lastStr = last
+      ? new Date(last).toLocaleString('ar-EG')
+      : 'لم يتم بعد';
     modal(`<h3>النسخة الاحتياطية</h3>
-      <p class="note" style="margin-bottom:12px">
+      <p class="note" style="margin-bottom:10px">
         تقرير Excel يحتوي اسم كل مشترٍ، عدد حركاته، تاريخ ووقت آخر حركة، والمبلغ المتبقي عليه.
       </p>
-      <button class="p" style="width:100%;padding:14px;font-size:15px;font-weight:700" id="xl" type="button">📊 تنزيل تقرير Excel</button>
+      <div class="box" style="margin-bottom:12px;background:var(--tint);border:none">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:4px">آخر نسخة تلقائية</div>
+        <div style="font-weight:700">${esc(lastStr)}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:6px">
+          تُحدَّث تلقائيًا كل 5 ساعات — ملف واحد فقط باسم
+          <span class="ltr">نسخة-المعاملات.xlsx</span>
+        </div>
+      </div>
+      <button class="p" style="width:100%;padding:14px;font-size:15px;font-weight:700" id="xl" type="button">📊 نسخ / تنزيل الآن</button>
       <button class="g" style="width:100%;margin-top:10px" id="no" type="button">إغلاق</button>`);
 
-    $('xl').onclick = exportExcel;
+    $('xl').onclick = () => { closeM(); exportExcel(); };
     $('no').onclick = closeM;
   };
 }
@@ -1415,6 +1431,177 @@ function setupTheme() {
   };
 }
 
+/* ============================================================
+   13) النسخ الاحتياطي التلقائي كل 5 ساعات — ملف واحد فقط
+   ============================================================ */
+const BACKUP_INTERVAL_MS = 5 * 60 * 60 * 1000;      // 5 ساعات
+const BACKUP_TS_KEY      = 'ledger_last_backup_ts';
+const BACKUP_FILE_NAME   = 'نسخة-المعاملات.xlsx';   // ← اسم ثابت (يُستبدل)
+const BACKUP_DIR_CAP     = 'LedgerBackups';
+const IDB_NAME           = 'ledger_backup_db';
+const IDB_STORE          = 'handles';
+
+/* ---- IndexedDB صغير لتخزين مقبض الملف ---- */
+function idbOpen() {
+  return new Promise((res, rej) => {
+    const rq = indexedDB.open(IDB_NAME, 1);
+    rq.onupgradeneeded = () => {
+      const db = rq.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+    };
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror   = () => rej(rq.error);
+  });
+}
+async function idbGet(k) {
+  try {
+    const db = await idbOpen();
+    return await new Promise((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const r  = tx.objectStore(IDB_STORE).get(k);
+      r.onsuccess = () => res(r.result || null);
+      r.onerror   = () => rej(r.error);
+    });
+  } catch (e) { return null; }
+}
+async function idbSet(k, v) {
+  try {
+    const db = await idbOpen();
+    await new Promise((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(v, k);
+      tx.oncomplete = res;
+      tx.onerror    = () => rej(tx.error);
+    });
+  } catch (e) {}
+}
+
+/* ---- وقت آخر نسخة ---- */
+const lastBackupTs = () => parseInt(localStorage.getItem(BACKUP_TS_KEY) || '0', 10) || 0;
+const markBackupDone = () => { try { localStorage.setItem(BACKUP_TS_KEY, String(Date.now())); } catch (e) {} };
+const isBackupDue    = () => Date.now() - lastBackupTs() >= BACKUP_INTERVAL_MS;
+
+/* ---- Blob → base64 ---- */
+function blobToBase64(blob) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload  = () => res(String(fr.result).split(',')[1] || '');
+    fr.onerror = () => rej(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+
+/* ---- كتابة الـ blob كملف واحد ---- */
+async function saveBackupBlob(blob) {
+  /* 1) تطبيق الجوال (Capacitor) */
+  const Cap = window.Capacitor;
+  if (Cap && Cap.Plugins && Cap.Plugins.Filesystem) {
+    try {
+      const { Filesystem, Directory } = Cap.Plugins;
+      const data = await blobToBase64(blob);
+      await Filesystem.writeFile({
+        path: BACKUP_DIR_CAP + '/' + BACKUP_FILE_NAME,
+        data,
+        directory: Directory.Documents,
+        recursive: true
+      });
+      return 'native';
+    } catch (e) {
+      console.warn('[backup] capacitor write failed, falling back:', e);
+    }
+  }
+
+  /* 2) File System Access API — نُبقي نفس المقبض */
+  if (window.showSaveFilePicker) {
+    let handle = await idbGet('backup_handle');
+    let perm = 'denied';
+    try {
+      if (handle && handle.queryPermission) {
+        perm = await handle.queryPermission({ mode: 'readwrite' });
+      }
+    } catch (e) {}
+
+    if (!handle || perm !== 'granted') {
+      try {
+        handle = await window.showSaveFilePicker({
+          suggestedName: BACKUP_FILE_NAME,
+          types: [{
+            description: 'Excel',
+            accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] }
+          }]
+        });
+        await idbSet('backup_handle', handle);
+      } catch (e) {
+        return 'aborted';
+      }
+    }
+    try {
+      if (handle.requestPermission) {
+        const p = await handle.requestPermission({ mode: 'readwrite' });
+        if (p !== 'granted') return 'aborted';
+      }
+      const w = await handle.createWritable();
+      await w.write(blob);
+      await w.close();
+      return 'fs';
+    } catch (e) {
+      return 'aborted';
+    }
+  }
+
+  /* 3) احتياطي: تنزيل عادي (متصفح قديم) */
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = BACKUP_FILE_NAME;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return 'download';
+}
+
+/* ---- تنفيذ النسخة ---- */
+let backupRunning = false;
+async function runAutoBackup(reason) {
+  if (backupRunning) return;
+  backupRunning = true;
+  try {
+    const bytes = buildExcelBytes();
+    if (!bytes) return;
+    const blob = new Blob([bytes], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+    const mode = await saveBackupBlob(blob);
+    if (mode === 'aborted') return;         // لم تُكتب → نحاول لاحقًا
+    markBackupDone();
+    console.log('[backup] saved:', new Date().toLocaleString('ar-EG'), '| mode=', mode, '| reason=', reason);
+  } catch (e) {
+    console.warn('[backup] failed:', e);
+  } finally {
+    backupRunning = false;
+  }
+}
+
+/* ---- الجدولة ---- */
+function scheduleAutoBackup() {
+  /* عند الإقلاع: بعد 4 ثوانٍ (لإتاحة تحميل كل شيء) */
+  if (isBackupDue()) {
+    setTimeout(() => runAutoBackup('startup'), 4000);
+  }
+  /* فحص كل دقيقة طالما التطبيق مفتوح */
+  setInterval(() => { if (isBackupDue()) runAutoBackup('interval'); }, 60 * 1000);
+  /* عند رجوع التطبيق للمقدمة */
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && isBackupDue()) {
+      runAutoBackup('visible');
+    }
+  });
+}
+
+/* خطاف للطبقة الأصلية (Background Runner في Capacitor) */
+window.__ledgerRunBackup = runAutoBackup;
+
 /* ------------------------------------------------------------
    12) الإقلاع
    ------------------------------------------------------------ */
@@ -1424,5 +1611,6 @@ setupProjectName();
 setupBackup();
 setupTheme();
 viewList();
+scheduleAutoBackup();
 
 })();
