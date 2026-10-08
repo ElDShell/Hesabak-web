@@ -1,6 +1,6 @@
 /* ============================================================
    سجل المعاملات — منطق التطبيق
-   الإصدار 7 — فلاتر متعددة + ترتيب متقدم
+   الإصدار 8 — فلاتر متعددة + ترتيب متقدم + تاريخ/وقت قابل للتعديل
    ============================================================ */
 (function () {
 'use strict';
@@ -48,9 +48,9 @@ let openId = null;
    3.5) حالة الفلاتر
    ------------------------------------------------------------ */
 const DEFAULT_FILTERS = () => ({
-  sort: 'name',    // name | date-desc | date-asc | amount-desc | amount-asc
-  status: 'all',   // all | debt | paid | credit
-  min: '',         // نص — يُحوَّل عند التطبيق
+  sort: 'name',
+  status: 'all',
+  min: '',
   max: ''
 });
 let filters = DEFAULT_FILTERS();
@@ -64,7 +64,6 @@ function filtersCount() {
   return n;
 }
 
-/** آخر نشاط زمني لمشترٍ (لترتيب حسب التاريخ) */
 function lastActivity(c) {
   if (!c.transactions.length) return '';
   let mx = '';
@@ -75,22 +74,18 @@ function lastActivity(c) {
   return mx;
 }
 
-/** تطبيق الفلاتر والترتيب على قائمة المشترين */
 function applyFilters(list) {
   let out = list.slice();
 
-  /* --- فلتر الحالة --- */
   if (filters.status === 'debt')        out = out.filter(c => bal(c) > 0);
   else if (filters.status === 'paid')   out = out.filter(c => bal(c) === 0);
   else if (filters.status === 'credit') out = out.filter(c => bal(c) < 0);
 
-  /* --- فلتر نطاق المبلغ (على قيمة المتبقي المطلقة) --- */
   const min = filters.min === '' ? NaN : parseFloat(filters.min);
   const max = filters.max === '' ? NaN : parseFloat(filters.max);
   if (!isNaN(min)) out = out.filter(c => Math.abs(bal(c)) >= min);
   if (!isNaN(max)) out = out.filter(c => Math.abs(bal(c)) <= max);
 
-  /* --- الترتيب --- */
   switch (filters.sort) {
     case 'name':
       out.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
@@ -228,6 +223,7 @@ function entryHtml(c, p) {
     ? '<div class="chips">' + r.map(d =>
         '<button type="button" class="chip" data-chip="' + esc(d) + '">' + esc(d) + '</button>').join('') + '</div>'
     : '';
+  const n = nowParts();   // القيم الافتراضية: التاريخ والوقت الحاليان
   return `
     <div class="entry" data-type="${type}">
       <div class="tg" role="group" aria-label="نوع الحركة">
@@ -235,12 +231,21 @@ function entryHtml(c, p) {
         <button type="button" class="tg-b tg-d" data-t="debt" aria-pressed="${type === 'debt'}">دين</button>
         <button type="button" class="tg-b tg-p" data-t="pay" aria-pressed="${type === 'pay'}">سداد</button>
       </div>
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div><label for="${p}am">المبلغ</label>
           <input id="${p}am" class="amin" type="number" inputmode="decimal" min="0" step="any" enterkeyhint="done"></div>
         <div><label for="${p}ds">البيان (اختياري)</label>
           <input id="${p}ds" autocomplete="off" enterkeyhint="done"></div>
       </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><label for="${p}dt">التاريخ</label>
+          <input id="${p}dt" type="date" value="${n.date}"></div>
+        <div><label for="${p}tm">الوقت</label>
+          <input id="${p}tm" type="time" value="${n.time}"></div>
+      </div>
+
       ${chips}
       <div class="pv" id="${p}pv" aria-live="polite"></div>
       <button class="sbtn" id="${p}sb" type="button">${type === 'debt' ? 'إضافة دين' : 'إضافة سداد'}</button>
@@ -249,6 +254,7 @@ function entryHtml(c, p) {
 
 function wireEntry(c, p, onDone) {
   const am = $(p + 'am'), ds = $(p + 'ds'), sb = $(p + 'sb'), pv = $(p + 'pv');
+  const dt = $(p + 'dt'), tm = $(p + 'tm');
   const ent = am.closest('.entry');
 
   const paint = () => {
@@ -266,8 +272,15 @@ function wireEntry(c, p, onDone) {
   const submit = () => {
     const a = parseFloat(am.value);
     if (!(a > 0)) { toast('أدخل مبلغًا أكبر من صفر'); am.focus(); return; }
-    const n = nowParts();
-    const tx = { id: uid(), type, amount: a, desc: ds.value.trim(), date: n.date, time: n.time };
+    const n = nowParts();               // قيمة احتياطية إن كان أحد الحقلين فارغًا
+    const tx = {
+      id: uid(),
+      type,
+      amount: a,
+      desc: ds.value.trim(),
+      date: (dt && dt.value) ? dt.value : n.date,
+      time: (tm && tm.value) ? tm.value : n.time
+    };
     c.transactions.push(tx);
     save();
     onDone(tx);
@@ -276,9 +289,14 @@ function wireEntry(c, p, onDone) {
   ent.querySelectorAll('.tg-b').forEach(b => b.onclick = () => { type = b.dataset.t; paint(); });
   am.oninput = paint;
   sb.onclick = submit;
-  [am, ds].forEach(el => el.onkeydown = e => {
-    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+
+  // Enter في أي من الحقول يُرسل
+  [am, ds, dt, tm].forEach(el => {
+    if (el) el.onkeydown = e => {
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    };
   });
+
   ent.querySelectorAll('[data-chip]').forEach(b => b.onclick = () => {
     ds.value = (ds.value === b.dataset.chip) ? '' : b.dataset.chip;
     if (!am.value) am.focus();
@@ -308,7 +326,7 @@ function quickAdd(id) {
 }
 
 /* ------------------------------------------------------------
-   6) عرض قائمة المشترين (مع لوحة الفلاتر)
+   6) عرض قائمة المشترين
    ------------------------------------------------------------ */
 function viewList() {
   cur = null;
@@ -319,7 +337,6 @@ function viewList() {
   const list = applyFilters(searched);
   const active = filtersCount();
 
-  /* --- شرائح الترتيب --- */
   const sortChips = [
     ['name',        'أبجدي'],
     ['date-desc',   'الأحدث'],
@@ -330,7 +347,6 @@ function viewList() {
     `<button class="fchip" type="button" data-fs="${v}" aria-pressed="${filters.sort === v}">${l}</button>`
   ).join('');
 
-  /* --- شرائح الحالة --- */
   const statusChips = [
     ['all',    'الكل'],
     ['debt',   'عليهم دين'],
@@ -438,7 +454,7 @@ function viewList() {
   $('sv').onclick = saveCustomer;
   $('nn').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); saveCustomer(); } };
 
-  /* --- لوحة الفلاتر: فتح/إغلاق --- */
+  /* --- لوحة الفلاتر --- */
   const fp = $('fp'), fph = $('fph');
   const toggleFp = () => {
     fpOpen = !fpOpen;
@@ -452,16 +468,14 @@ function viewList() {
     }
   };
 
-  /* --- شرائح الترتيب --- */
   document.querySelectorAll('[data-fs]').forEach(b => b.onclick = e => {
     e.stopPropagation();
     filters.sort = b.dataset.fs;
     viewList();
-    fpOpen = true; // ابقَ اللوحة مفتوحة
+    fpOpen = true;
     const nf = $('fp'); if (nf) nf.classList.add('open');
   });
 
-  /* --- شرائح الحالة --- */
   document.querySelectorAll('[data-fst]').forEach(b => b.onclick = e => {
     e.stopPropagation();
     filters.status = b.dataset.fst;
@@ -470,7 +484,6 @@ function viewList() {
     const nf = $('fp'); if (nf) nf.classList.add('open');
   });
 
-  /* --- نطاق المبلغ: تحديث عند change/blur للحفاظ على التركيز --- */
   const fmin = $('fmin'), fmax = $('fmax');
   const commitAmount = () => {
     filters.min = fmin ? fmin.value.trim() : '';
@@ -485,7 +498,6 @@ function viewList() {
     if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
   }));
 
-  /* --- إعادة ضبط --- */
   const freset = $('freset');
   if (freset) freset.onclick = e => {
     e.stopPropagation();
@@ -621,7 +633,13 @@ function viewDetail(id, focusAmount) {
         <input id="ea" type="number" step="any" value="${t.amount}">
         <label for="ed2">البيان</label>
         <input id="ed2" value="${esc(t.desc)}">
-        <div class="row">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px">
+          <div><label for="edt">التاريخ</label>
+            <input id="edt" type="date" value="${esc(t.date)}"></div>
+          <div><label for="etm">الوقت</label>
+            <input id="etm" type="time" value="${esc(t.time)}"></div>
+        </div>
+        <div class="row" style="margin-top:8px">
           <button class="g" style="flex:1" id="no" type="button">إلغاء</button>
           <button class="p" style="flex:1" id="ok" type="button">حفظ</button>
         </div>`);
@@ -629,7 +647,11 @@ function viewDetail(id, focusAmount) {
       $('ok').onclick = () => {
         const a = parseFloat($('ea').value);
         if (!(a > 0)) { toast('أدخل مبلغًا صحيحًا'); return; }
-        t.type = $('et').value; t.amount = a; t.desc = $('ed2').value.trim();
+        t.type = $('et').value;
+        t.amount = a;
+        t.desc = $('ed2').value.trim();
+        if ($('edt').value) t.date = $('edt').value;
+        if ($('etm').value) t.time = $('etm').value;
         save(); closeM(); viewDetail(id);
       };
     };
@@ -991,35 +1013,126 @@ async function showLedgerImage(id) {
 /* ------------------------------------------------------------
    10) النسخة الاحتياطية
    ------------------------------------------------------------ */
-function setupBackup() {
-  $('bk').onclick = () => {
-    modal(`<h3>نسخة احتياطية</h3>
-      <p class="note">انسخ النص واحفظه في مكان آمن. للاسترجاع الصقه هنا ثم اضغط «استرجاع».</p>
-      <textarea id="bt" aria-label="بيانات النسخة"></textarea>
-      <div class="row" style="margin-top:10px">
-        <button class="o" style="flex:1" id="cp" type="button">نسخ</button>
-        <button class="d" style="flex:1" id="rs" type="button">استرجاع</button>
-      </div>
-      <button class="g" style="width:100%;margin-top:8px" id="no" type="button">إغلاق</button>`);
-    $('bt').value = JSON.stringify(customers);
-    $('no').onclick = closeM;
-    $('cp').onclick = async () => {
-      try { await navigator.clipboard.writeText($('bt').value); toast('تم النسخ'); }
-      catch (e) { $('bt').select(); toast('انسخ يدويًا'); }
+/* ------------------------------------------------------------
+   10) تصدير تقرير Excel
+   ------------------------------------------------------------ */
+function exportExcel() {
+  if (!customers.length) { toast('لا يوجد مشترون للتصدير'); return; }
+
+  const reportDate = nowParts().date;
+
+  /* --- تجهيز صفوف التقرير --- */
+  const rows = customers.map(c => {
+    const b = Math.round(bal(c) * 100) / 100;
+    const last = lastActivity(c);                     // "YYYY-MM-DD HH:MM" أو ""
+    return {
+      name:     c.name,
+      count:    c.transactions.length,
+      lastDate: last ? last.slice(0, 10) : '',
+      lastTime: last ? last.slice(11, 16) : '',
+      debt:     b > 0 ? b : 0,
+      credit:   b < 0 ? -b : 0,
+      balance:  b,
+      status:   b > 0 ? 'عليه دين' : (b < 0 ? 'رصيد له' : 'مسدَّد')
     };
-    $('rs').onclick = () => {
-      try {
-        const d = JSON.parse($('bt').value);
-        if (!Array.isArray(d)) throw 0;
-        confirmBox('استبدال البيانات؟', 'ستُستبدل كل البيانات الحالية بالنسخة الملصقة.', 'استرجاع', () => {
-          customers = normalize(d);
-          save(); viewList(); toast('تم الاسترجاع');
-        });
-      } catch (e) { toast('النص غير صالح'); }
-    };
+  });
+
+  // ترتيب: الأكثر دينًا أولاً ثم أبجديًا
+  rows.sort((a, b) => (b.debt - a.debt) || a.name.localeCompare(b.name, 'ar'));
+
+  const totalDebt   = Math.round(rows.reduce((s, r) => s + r.debt,   0) * 100) / 100;
+  const totalCredit = Math.round(rows.reduce((s, r) => s + r.credit, 0) * 100) / 100;
+
+  const cellNum = (v, cls) => {
+    const c = cls ? ('num ' + cls) : 'num';
+    const s = Number(v) ? String(Math.round(Number(v) * 100) / 100) : '';
+    return '<td class="' + c + '">' + s + '</td>';
   };
+
+  /* --- بناء ملف HTML يفتحه Excel --- */
+  let html =
+    '<html xmlns:x="urn:schemas-microsoft-com:office:excel" dir="rtl">' +
+    '<head><meta charset="UTF-8"><style>' +
+    'table{border-collapse:collapse;font-family:Tajawal,Arial,sans-serif}' +
+    'th,td{border:1px solid #c0c0c0;padding:6px 10px;text-align:right;vertical-align:middle;white-space:nowrap}' +
+    'th{background:#0f4c4a;color:#ffffff;font-weight:bold}' +
+    '.title{font-size:16pt;font-weight:bold;color:#0f4c4a;padding:8px 0}' +
+    '.meta{color:#6b7280;font-size:10pt;padding-bottom:8px}' +
+    '.num{mso-number-format:"0\\.00";text-align:left}' +
+    '.debt{color:#c0392b;font-weight:bold}' +
+    '.credit{color:#26734a;font-weight:bold}' +
+    '.ok{color:#26734a}' +
+    '.total{background:#e2ecea;font-weight:bold}' +
+    '</style></head><body>';
+
+  html += '<div class="title">سجل المعاملات — تقرير المبالغ المتبقية</div>';
+  html += '<div class="meta">' +
+          'تاريخ التقرير: ' + reportDate +
+          '  •  عدد المشترين: ' + rows.length +
+          '  •  إجمالي الديون: ' + totalDebt +
+          '  •  إجمالي أرصدة المشترين: ' + totalCredit +
+          '</div>';
+
+  html += '<table><thead><tr>' +
+          '<th>#</th>' +
+          '<th>اسم المشتري</th>' +
+          '<th>عدد الحركات</th>' +
+          '<th>تاريخ آخر حركة</th>' +
+          '<th>وقت آخر حركة</th>' +
+          '<th>المتبقي عليه (دين)</th>' +
+          '<th>رصيد له</th>' +
+          '<th>الحالة</th>' +
+          '</tr></thead><tbody>';
+
+  rows.forEach((r, i) => {
+    const cls = r.balance > 0 ? 'debt' : (r.balance < 0 ? 'credit' : 'ok');
+    html += '<tr>' +
+      '<td>' + (i + 1) + '</td>' +
+      '<td>' + esc(r.name) + '</td>' +
+      '<td class="num">' + r.count + '</td>' +
+      '<td>' + (r.lastDate || '—') + '</td>' +
+      '<td>' + (r.lastTime || '—') + '</td>' +
+      cellNum(r.debt,   'debt') +
+      cellNum(r.credit, 'credit') +
+      '<td class="' + cls + '">' + r.status + '</td>' +
+      '</tr>';
+  });
+
+  html += '<tr class="total">' +
+          '<td colspan="5">الإجمالي</td>' +
+          cellNum(totalDebt,   'debt') +
+          cellNum(totalCredit, 'credit') +
+          '<td></td>' +
+          '</tr>';
+
+  html += '</tbody></table></body></html>';
+
+  /* --- التنزيل --- */
+  const blob = new Blob(['\ufeff' + html], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'تقرير-المعاملات-' + reportDate + '.xls';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+  toast('تم تنزيل تقرير Excel');
 }
 
+function setupBackup() {
+  $('bk').onclick = () => {
+    modal(`<h3>النسخة الاحتياطية</h3>
+      <p class="note" style="margin-bottom:12px">
+        تقرير Excel يحتوي اسم كل مشترٍ، عدد حركاته، تاريخ ووقت آخر حركة، والمبلغ المتبقي عليه.
+      </p>
+      <button class="p" style="width:100%;padding:14px;font-size:15px;font-weight:700" id="xl" type="button">📊 تنزيل تقرير Excel</button>
+      <button class="g" style="width:100%;margin-top:10px" id="no" type="button">إغلاق</button>`);
+
+    $('xl').onclick = exportExcel;
+    $('no').onclick = closeM;
+  };
+}
 /* ------------------------------------------------------------
    11) الثيم
    ------------------------------------------------------------ */

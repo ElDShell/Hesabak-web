@@ -252,3 +252,33 @@ tr:last-child td{border-bottom:none}
 
 .factions{display:flex;gap:8px;margin-top:12px}
 .factions button{flex:1;padding:8px;font-size:13px}
+/* ============================================================
+   حقول التاريخ والوقت
+   ============================================================ */
+input[type="date"],
+input[type="time"]{
+  font-variant-numeric:tabular-nums;
+  font-family:inherit;
+}
+
+/* أيقونة المنتقي في الوضع الليلي (يدوي) */
+:root[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator,
+:root[data-theme="dark"] input[type="time"]::-webkit-calendar-picker-indicator{
+  filter:invert(1) brightness(1.4);
+  cursor:pointer;
+}
+
+/* أيقونة المنتقي في الوضع الليلي (تلقائي حسب النظام) */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) input[type="date"]::-webkit-calendar-picker-indicator,
+  :root:not([data-theme="light"]) input[type="time"]::-webkit-calendar-picker-indicator{
+    filter:invert(1) brightness(1.4);
+    cursor:pointer;
+  }
+}
+
+/* تصغير حشوة حقول التاريخ/الوقت قليلاً لتناسب التصميم */
+input[type="date"],
+input[type="time"]{
+  padding-inline:8px;
+}
