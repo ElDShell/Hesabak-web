@@ -1,7 +1,7 @@
 /* ============================================================
    سجل المعاملات — منطق التطبيق
-   الإصدار 10 — اسم مشروع قابل للتعديل + Excel فقط
-               + نسخة احتياطية تلقائية كل 5 ساعات (ملف واحد)
+   الإصدار 11 — حفظ Excel مباشر تلقائيًا + نسخة يومية 11:59م
+                 + زر واتساب + صورة بآخر 10 حركات
    ============================================================ */
 (function () {
 'use strict';
@@ -33,7 +33,7 @@ const nowParts = () => {
    2) ثوابت الصورة
    ------------------------------------------------------------ */
 const IMG_WIDTH = 1080;
-const IMG_MAX_ROWS = 15;
+const IMG_MAX_ROWS = 10;          // ← آخر 10 حركات فقط
 
 /* ------------------------------------------------------------
    3) حالة التطبيق
@@ -160,7 +160,11 @@ function load() {
   ]);
 }
 
-function save() { store('s', JSON.stringify(customers)); }
+/* حفظ + مزامنة تلقائية مع Excel */
+function save() {
+  store('s', JSON.stringify(customers));
+  scheduleExcelSync();          // ← مزامنة تلقائية
+}
 
 const bal = c =>
   Math.round(c.transactions.reduce((a, t) => a + (t.type === 'debt' ? t.amount : -t.amount), 0) * 100) / 100;
@@ -568,7 +572,7 @@ function viewDetail(id, focusAmount) {
       <small>${b < 0 ? 'رصيد للمشتري' : 'المتبقي عليه'}</small>
       <div class="big">${b > 0 ? '<span class="ltr">−' + num(b) + '</span>' : num(Math.abs(b))}</div>
     </div>
-    <button class="p bigbtn" id="img" type="button">📄 صورة السجل</button>
+    <button class="p bigbtn" id="img" type="button">📄 صورة السجل (آخر 10 حركات)</button>
     <div class="box">
       <h3>إضافة حركة</h3>
       ${entryHtml(c, 'n')}
@@ -675,7 +679,7 @@ function viewDetail(id, focusAmount) {
 }
 
 /* ============================================================
-   8) توليد صورة السجل
+   8) توليد صورة السجل — آخر 10 حركات مع التاريخ والوقت
    ============================================================ */
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -724,7 +728,7 @@ async function generateLedgerImage(customer) {
   });
 
   const total = withBalance.length;
-  const rowsShown = withBalance.slice(-IMG_MAX_ROWS);
+  const rowsShown = withBalance.slice(-IMG_MAX_ROWS);      // آخر 10
   const hidden = Math.max(0, total - IMG_MAX_ROWS);
   const finalBalance = cum;
 
@@ -745,7 +749,7 @@ async function generateLedgerImage(customer) {
   const H_NAME       = 90;
   const H_BALANCE    = 190;
   const H_TABLE_HEAD = 75;
-  const H_ROW        = 76;
+  const H_ROW        = 86;
   const H_HIDDEN     = hidden ? 55 : 0;
   const H_FOOTER     = 110;
 
@@ -844,9 +848,9 @@ async function generateLedgerImage(customer) {
 
   /* 4. الجدول */
   const CONTENT_W = W - PAD * 2;
-  const COL_DATE_W    = 200;
+  const COL_DATE_W    = 220;
   const COL_AMOUNT_W  = 200;
-  const COL_NOTES_W   = 320;
+  const COL_NOTES_W   = 300;
 
   const colDateRight    = W - PAD;
   const colAmountRight  = colDateRight   - COL_DATE_W;
@@ -862,7 +866,7 @@ async function generateLedgerImage(customer) {
   ctx.textAlign = 'right';
   ctx.font = '700 26px Tajawal, Tahoma, sans-serif';
   const headY = y + H_TABLE_HEAD / 2;
-  ctx.fillText('التاريخ',         colDateRight   - 15, headY);
+  ctx.fillText('التاريخ والوقت',   colDateRight   - 15, headY);
   ctx.fillText('المبلغ',          colAmountRight - 15, headY);
   ctx.fillText('الملاحظات',       colNotesRight  - 15, headY);
   ctx.fillText('الرصيد المتراكم', colBalRight    - 15, headY);
@@ -878,23 +882,30 @@ async function generateLedgerImage(customer) {
       ctx.fillRect(PAD, rowY, CONTENT_W, H_ROW);
     }
 
+    /* التاريخ + الوقت على سطرين */
     ctx.fillStyle = C.ink;
     ctx.textAlign = 'right';
-    ctx.font = '400 22px Tajawal, Tahoma, sans-serif';
-    ctx.fillText(t.date, colDateRight - 15, cy);
+    ctx.font = '500 22px Tajawal, Tahoma, sans-serif';
+    ctx.fillText(t.date, colDateRight - 15, cy - 12);
+    ctx.fillStyle = C.muted;
+    ctx.font = '400 20px Tajawal, Tahoma, sans-serif';
+    ctx.fillText(t.time || '', colDateRight - 15, cy + 14);
 
+    /* المبلغ */
     const amtColor = t.type === 'debt' ? C.debt : C.pay;
     const amtSign  = t.type === 'debt' ? '−' : '';
     ctx.fillStyle = amtColor;
     ctx.font = '700 26px Tajawal, Tahoma, sans-serif';
     ctx.fillText(amtSign + numImg(t.amount), colAmountRight - 15, cy);
 
+    /* الملاحظات */
     ctx.fillStyle = C.muted;
     ctx.font = '400 20px Tajawal, Tahoma, sans-serif';
     const notes = t.desc ? truncateText(ctx, t.desc, COL_NOTES_W - 30) : '—';
     ctx.textAlign = 'right';
     ctx.fillText(notes, colNotesRight - 15, cy);
 
+    /* الرصيد */
     ctx.fillStyle = t.balance > 0 ? C.debt : (t.balance < 0 ? C.pay : C.muted);
     ctx.font = '500 24px Tajawal, Tahoma, sans-serif';
     ctx.textAlign = 'right';
@@ -978,6 +989,7 @@ async function showLedgerImage(id) {
   modal(
     '<div style="text-align:center">' +
       '<h3 style="margin-bottom:8px">' + esc(c.name) + '</h3>' +
+      '<p class="note" style="margin:0 0 8px;font-size:12px">آخر 10 حركات فقط</p>' +
       '<img src="' + url + '" alt="سجل الحساب" ' +
            'style="max-width:100%;max-height:55vh;border-radius:10px;' +
                   'border:1px solid var(--border);box-shadow:0 2px 8px rgba(0,0,0,.08)">' +
@@ -1126,12 +1138,21 @@ function makeZip(files) {
 }
 
 /* ----------------------------------------------
-   بناء ملف Excel كـ bytes (بدون تنزيل)
+   بناء ملف Excel كـ bytes — مع العنوان (اليوم + التاريخ + اسم المشروع)
    ---------------------------------------------- */
 function buildExcelBytes() {
   if (!customers.length) return null;
 
+  const now = new Date();
   const reportDate = nowParts().date;
+  const reportTime = nowParts().time;
+  const arabicDay  = now.toLocaleDateString('ar-EG', { weekday: 'long' });
+  const arabicFull = now.toLocaleDateString('ar-EG', {
+    day: 'numeric', month: 'long', year: 'numeric'
+  });
+
+  /* عنوان الملف: اسم المشروع — اليوم — التاريخ الكامل */
+  const TITLE = projectName + ' — ' + arabicDay + ' ' + arabicFull;
 
   /* --- تجهيز الصفوف --- */
   const rows = customers.map(c => {
@@ -1178,9 +1199,9 @@ function buildExcelBytes() {
   const sheetRows = [];
 
   sheetRows.push('<row r="1" ht="26" customHeight="1">' +
-    cStr('A1', 1, projectName + ' — تقرير المبالغ المتبقية') + '</row>');
+    cStr('A1', 1, TITLE) + '</row>');
 
-  const meta = 'تاريخ التقرير: ' + reportDate +
+  const meta = 'تاريخ التقرير: ' + reportDate + '  •  الوقت: ' + reportTime +
     '   •   عدد المشترين: ' + rows.length +
     '   •   إجمالي الديون: ' + totalDebt +
     '   •   إجمالي أرصدة المشترين: ' + totalCredit;
@@ -1342,6 +1363,32 @@ async function exportExcel() {
 }
 
 /* ------------------------------------------------------------
+   10.5) زر واتساب للتواصل عند وجود مشكلة
+   ------------------------------------------------------------ */
+const WHATSAPP_NUMBER = '972592057459';
+const WHATSAPP_INTL   = '+972 59-205-7459';
+
+function setupWhatsApp() {
+  const link = 'https://wa.me/' + WHATSAPP_NUMBER +
+               '?text=' + encodeURIComponent('مرحبًا، لديّ مشكلة في تطبيق سجل المعاملات');
+
+  /* أيقونة صغيرة بجانب زر الثيم في الرأس */
+  const th = $('th');
+  if (th && th.parentNode && !$('waTop')) {
+    const wa = document.createElement('button');
+    wa.id = 'waTop';
+    wa.type = 'button';
+    wa.className = 'g sm';
+    wa.title = 'تواصل معنا عبر واتساب ' + WHATSAPP_INTL;
+    wa.setAttribute('aria-label', 'تواصل عبر واتساب');
+    wa.textContent = '💬';
+    wa.style.marginInlineEnd = '6px';
+    wa.onclick = () => window.open(link, '_blank', 'noopener');
+    th.parentNode.insertBefore(wa, th);
+  }
+}
+
+/* ------------------------------------------------------------
    10.6) تعديل اسم المشروع
    ------------------------------------------------------------ */
 function renderProjectName() {
@@ -1352,7 +1399,7 @@ function renderProjectName() {
 function editProjectName() {
   modal(`<h3>اسم المشروع</h3>
     <p class="note" style="margin-bottom:10px">
-      يظهر في رأس القائمة وفي تقرير Excel وفي صورة السجل.
+      يظهر في رأس القائمة وفي عنوان تقرير Excel وفي صورة السجل.
     </p>
     <input id="pni" value="${esc(projectName)}" maxlength="40"
            aria-label="اسم المشروع" enterkeyhint="done" autocomplete="off">
@@ -1372,6 +1419,7 @@ function editProjectName() {
     saveProjectName();
     renderProjectName();
     closeM();
+    scheduleExcelSync();
     toast('تم تحديث اسم المشروع');
   };
 
@@ -1401,20 +1449,26 @@ function setupBackup() {
       : 'لم يتم بعد';
     modal(`<h3>النسخة الاحتياطية</h3>
       <p class="note" style="margin-bottom:10px">
-        تقرير Excel يحتوي اسم كل مشترٍ، عدد حركاته، تاريخ ووقت آخر حركة، والمبلغ المتبقي عليه.
+        يتم تحديث ملف Excel <b>تلقائيًا</b> بعد كل تعديل،
+        وتُحفظ نسخة يومية تلقائيًا الساعة <b class="ltr">11:59</b> مساءً.
       </p>
       <div class="box" style="margin-bottom:12px;background:var(--tint);border:none">
-        <div style="font-size:13px;color:var(--muted);margin-bottom:4px">آخر نسخة تلقائية</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:4px">آخر حفظ تلقائي</div>
         <div style="font-weight:700">${esc(lastStr)}</div>
         <div style="font-size:12px;color:var(--muted);margin-top:6px">
-          تُحدَّث تلقائيًا كل 5 ساعات — ملف واحد فقط باسم
-          <span class="ltr">نسخة-المعاملات.xlsx</span>
+          الملف: <span class="ltr">${esc(getBackupFileName())}</span>
         </div>
       </div>
       <button class="p" style="width:100%;padding:14px;font-size:15px;font-weight:700" id="xl" type="button">📊 نسخ / تنزيل الآن</button>
+      <button class="o" style="width:100%;margin-top:10px" id="wa" type="button">💬 تواصل عبر واتساب</button>
       <button class="g" style="width:100%;margin-top:10px" id="no" type="button">إغلاق</button>`);
 
     $('xl').onclick = () => { closeM(); exportExcel(); };
+    $('wa').onclick = () => {
+      window.open('https://wa.me/' + WHATSAPP_NUMBER +
+        '?text=' + encodeURIComponent('مرحبًا، لديّ مشكلة في تطبيق سجل المعاملات'),
+        '_blank', 'noopener');
+    };
     $('no').onclick = closeM;
   };
 }
@@ -1432,14 +1486,19 @@ function setupTheme() {
 }
 
 /* ============================================================
-   13) النسخ الاحتياطي التلقائي كل 5 ساعات — ملف واحد فقط
+   13) النسخ الاحتياطي التلقائي اليومي الساعة 11:59 مساءً
+        + مزامنة Excel المباشرة بعد كل تعديل
    ============================================================ */
-const BACKUP_INTERVAL_MS = 5 * 60 * 60 * 1000;      // 5 ساعات
 const BACKUP_TS_KEY      = 'ledger_last_backup_ts';
-const BACKUP_FILE_NAME   = 'نسخة-المعاملات.xlsx';   // ← اسم ثابت (يُستبدل)
-const BACKUP_DIR_CAP     = 'LedgerBackups';
+const BACKUP_FILE_BASE   = 'نسخة-المعاملات';
+function getBackupFileName() {
+  // nowParts().date يرجّع التاريخ بصيغة YYYY-MM-DD
+  return BACKUP_FILE_BASE + '-' + nowParts().date + '.xlsx';
+}const BACKUP_DIR_CAP     = 'LedgerBackups';
 const IDB_NAME           = 'ledger_backup_db';
 const IDB_STORE          = 'handles';
+const DAILY_HOUR         = 23;   // 11 مساءً
+const DAILY_MIN          = 59;   // 59 دقيقة
 
 /* ---- IndexedDB صغير لتخزين مقبض الملف ---- */
 function idbOpen() {
@@ -1479,7 +1538,25 @@ async function idbSet(k, v) {
 /* ---- وقت آخر نسخة ---- */
 const lastBackupTs = () => parseInt(localStorage.getItem(BACKUP_TS_KEY) || '0', 10) || 0;
 const markBackupDone = () => { try { localStorage.setItem(BACKUP_TS_KEY, String(Date.now())); } catch (e) {} };
-const isBackupDue    = () => Date.now() - lastBackupTs() >= BACKUP_INTERVAL_MS;
+
+/* ---- هل حان وقت النسخة اليومية (11:59)؟ ---- */
+function isDailyBackupDue() {
+  const last = lastBackupTs();
+  if (!last) return true;
+
+  const now = new Date();
+  const todayTarget = new Date(
+    now.getFullYear(), now.getMonth(), now.getDate(),
+    DAILY_HOUR, DAILY_MIN, 0, 0
+  ).getTime();
+
+  if (now.getTime() >= todayTarget) {
+    // بعد 11:59 اليوم → مستحقة إن لم تُحفظ اليوم
+    return last < todayTarget;
+  }
+  // قبل 11:59 اليوم → مستحقة إن لم تُحفظ بالأمس
+  return last < todayTarget - 24 * 60 * 60 * 1000;
+}
 
 /* ---- Blob → base64 ---- */
 function blobToBase64(blob) {
@@ -1500,7 +1577,7 @@ async function saveBackupBlob(blob) {
       const { Filesystem, Directory } = Cap.Plugins;
       const data = await blobToBase64(blob);
       await Filesystem.writeFile({
-        path: BACKUP_DIR_CAP + '/' + BACKUP_FILE_NAME,
+        path: BACKUP_DIR_CAP + '/' + getBackupFileName(),
         data,
         directory: Directory.Documents,
         recursive: true
@@ -1514,6 +1591,10 @@ async function saveBackupBlob(blob) {
   /* 2) File System Access API — نُبقي نفس المقبض */
   if (window.showSaveFilePicker) {
     let handle = await idbGet('backup_handle');
+    if (handle && handle.name && handle.name !== getBackupFileName()) {
+      handle = null;
+      try { await idbSet('backup_handle', null); } catch (e) {}
+    }
     let perm = 'denied';
     try {
       if (handle && handle.queryPermission) {
@@ -1524,7 +1605,7 @@ async function saveBackupBlob(blob) {
     if (!handle || perm !== 'granted') {
       try {
         handle = await window.showSaveFilePicker({
-          suggestedName: BACKUP_FILE_NAME,
+          suggestedName: getBackupFileName(),
           types: [{
             description: 'Excel',
             accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] }
@@ -1553,7 +1634,7 @@ async function saveBackupBlob(blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = BACKUP_FILE_NAME;
+  a.download = getBackupFileName();
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -1561,7 +1642,66 @@ async function saveBackupBlob(blob) {
   return 'download';
 }
 
-/* ---- تنفيذ النسخة ---- */
+/* ============================================================
+   مزامنة Excel المباشرة — تُستدعى بعد كل تعديل
+   ============================================================ */
+let excelSyncTimer = null;
+
+function scheduleExcelSync() {
+  clearTimeout(excelSyncTimer);
+  excelSyncTimer = setTimeout(syncExcelSilently, 2500);
+}
+
+async function syncExcelSilently() {
+  const bytes = buildExcelBytes();
+  if (!bytes) return;
+
+  const blob = new Blob([bytes], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  });
+
+  /* 1) Capacitor: كتابة مباشرة بدون طلب إذن */
+  const Cap = window.Capacitor;
+  if (Cap && Cap.Plugins && Cap.Plugins.Filesystem) {
+    try {
+      const { Filesystem, Directory } = Cap.Plugins;
+      const data = await blobToBase64(blob);
+      await Filesystem.writeFile({
+        path: BACKUP_DIR_CAP + '/' + getBackupFileName(),
+        data,
+        directory: Directory.Documents,
+        recursive: true
+      });
+      markBackupDone();
+      console.log('[sync] excel updated (native)');
+      return;
+    } catch (e) {
+      console.warn('[sync] native failed:', e);
+    }
+  }
+
+  /* 2) الويب: نستخدم المقبض المحفوظ إن وُجد */
+  const handle = await idbGet('backup_handle');
+  if (!handle || (handle.name && handle.name !== getBackupFileName())) return;
+
+  try {
+    let perm = 'denied';
+    if (handle.queryPermission) {
+      perm = await handle.queryPermission({ mode: 'readwrite' });
+    }
+    if (perm !== 'granted') return;
+
+    const w = await handle.createWritable();
+    await w.write(blob);
+    await w.close();
+    markBackupDone();
+    console.log('[sync] excel updated (web)');
+  } catch (e) {
+    console.warn('[sync] web failed:', e);
+  }
+}
+
+/* ---- تنفيذ النسخة اليومية ---- */
 let backupRunning = false;
 async function runAutoBackup(reason) {
   if (backupRunning) return;
@@ -1573,9 +1713,10 @@ async function runAutoBackup(reason) {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     });
     const mode = await saveBackupBlob(blob);
-    if (mode === 'aborted') return;         // لم تُكتب → نحاول لاحقًا
+    if (mode === 'aborted') return;
     markBackupDone();
-    console.log('[backup] saved:', new Date().toLocaleString('ar-EG'), '| mode=', mode, '| reason=', reason);
+    console.log('[backup] saved:', new Date().toLocaleString('ar-EG'),
+                '| mode=', mode, '| reason=', reason);
   } catch (e) {
     console.warn('[backup] failed:', e);
   } finally {
@@ -1583,20 +1724,35 @@ async function runAutoBackup(reason) {
   }
 }
 
-/* ---- الجدولة ---- */
+/* ============================================================
+   الجدولة:
+   - عند الإقلاع: إن فات موعد 11:59 → احفظ الآن
+   - فحص كل دقيقة أثناء فتح التطبيق
+   - عند رجوع التطبيق للمقدمة (visibilitychange)
+   - عند استئناف Capacitor (resume)
+   ============================================================ */
 function scheduleAutoBackup() {
-  /* عند الإقلاع: بعد 4 ثوانٍ (لإتاحة تحميل كل شيء) */
-  if (isBackupDue()) {
+  if (isDailyBackupDue()) {
     setTimeout(() => runAutoBackup('startup'), 4000);
   }
-  /* فحص كل دقيقة طالما التطبيق مفتوح */
-  setInterval(() => { if (isBackupDue()) runAutoBackup('interval'); }, 60 * 1000);
-  /* عند رجوع التطبيق للمقدمة */
+
+  setInterval(() => { if (isDailyBackupDue()) runAutoBackup('interval'); }, 60 * 1000);
+
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && isBackupDue()) {
+    if (document.visibilityState === 'visible' && isDailyBackupDue()) {
       runAutoBackup('visible');
     }
   });
+
+  /* Capacitor: استئناف التطبيق (بعد إغلاق الجوال) */
+  const Cap = window.Capacitor;
+  if (Cap && Cap.Plugins && Cap.Plugins.App) {
+    try {
+      Cap.Plugins.App.addListener('resume', () => {
+        if (isDailyBackupDue()) runAutoBackup('resume');
+      });
+    } catch (e) {}
+  }
 }
 
 /* خطاف للطبقة الأصلية (Background Runner في Capacitor) */
@@ -1610,6 +1766,7 @@ loadProjectName();
 setupProjectName();
 setupBackup();
 setupTheme();
+setupWhatsApp();
 viewList();
 scheduleAutoBackup();
 
