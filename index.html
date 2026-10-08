@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0f4c4a">
+    <meta name="color-scheme" content="light dark">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>سجل المعاملات</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -14,20 +17,22 @@
 </head>
 <body>
 
-    <div class="app">
-        <header>
-            
+    <!-- شريط التطبيق العلوي (ثابت) -->
+    <header class="appbar">
+        <div class="bar">
             <div class="brand">
                 <h1 class="pn" id="pt" role="button" tabindex="0" title="اضغط لتغيير اسم المشروع">مشروع 1</h1>
                 <span class="sub">سجل المعاملات</span>
             </div>
             <div class="row">
-            <button class="g sm" id="bk" type="button">نسخة احتياطية</button>
-            <button class="g sm" id="th" type="button" aria-label="تبديل الوضع الليلي">🌓</button>
+                <button class="g sm" id="bk" type="button">نسخة احتياطية</button>
+                <button class="g sm" id="th" type="button" aria-label="تبديل الوضع الليلي">🌓</button>
             </div>
-        </header>
+        </div>
+    </header>
 
-    <main id="v"></main>
+    <div class="app">
+        <main id="v"></main>
     </div>
 
     <div id="m" class="hide"></div>

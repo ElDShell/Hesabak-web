@@ -428,6 +428,7 @@ function viewList() {
           const owes = b > 0, credit = b < 0;
           return `<div class="cust${c.id === openId ? ' open' : ''}" data-id="${esc(c.id)}" role="button" tabindex="0" aria-expanded="${c.id === openId}">
             <div class="ct">
+              <div class="av" aria-hidden="true">${esc([...c.name.trim()][0] || '؟')}</div>
               <div class="inf">
                 <div class="nm">${esc(c.name)}</div>
                 <small>${num(c.transactions.length)} حركة</small>
@@ -436,10 +437,10 @@ function viewList() {
                 ${owes ? '<span class="ltr">−' + num(b) + '</span>' : (credit ? num(-b) : 'مسدَّد')}
                 ${owes ? '<small>رصيد عليه</small>' : (credit ? '<small>رصيد له</small>' : '')}
               </div>
-              <div class="row">
-                <button class="p sm" data-add="${esc(c.id)}" type="button">إضافة حركة</button>
-                <button class="o sm" data-img="${esc(c.id)}" type="button">صورة</button>
-              </div>
+            </div>
+            <div class="cacts">
+              <button class="p" data-add="${esc(c.id)}" type="button">＋ إضافة حركة</button>
+              <button class="o" data-img="${esc(c.id)}" type="button">🖼 صورة</button>
             </div>
             <div class="cm"><div class="cmi"><div>
               <button class="p" style="width:100%" data-view="${esc(c.id)}" type="button">عرض السجل</button>
@@ -555,42 +556,41 @@ function viewDetail(id, focusAmount) {
   const rows = [...c.transactions].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
 
   $('v').innerHTML = `
-    <div class="row" style="margin-bottom:12px">
-      <button class="o" id="bk2" type="button">⬅ عودة</button>
-      <button class="p" id="img" type="button">📄 صورة السجل</button>
-      <button class="g" id="ed" type="button">تعديل الاسم</button>
-      <button class="d sm" id="dc" type="button">حذف</button>
+    <div class="dtop">
+      <button class="o" id="bk2" type="button">→ عودة</button>
+      <div class="dtop-end">
+        <button class="g sm" id="ed" type="button">✏️ تعديل الاسم</button>
+        <button class="d sm" id="dc" type="button">حذف</button>
+      </div>
     </div>
-    <h2 style="margin:0 0 4px;color:var(--brand)">${esc(c.name)}</h2>
+    <h2 class="dname">${esc(c.name)}</h2>
     <div class="sum">
       <small>${b < 0 ? 'رصيد للمشتري' : 'المتبقي عليه'}</small>
       <div class="big">${b > 0 ? '<span class="ltr">−' + num(b) + '</span>' : num(Math.abs(b))}</div>
     </div>
+    <button class="p bigbtn" id="img" type="button">📄 صورة السجل</button>
     <div class="box">
       <h3>إضافة حركة</h3>
       ${entryHtml(c, 'n')}
     </div>
-    <h3 style="font-size:15px;margin:0 0 6px">سجل الحركات</h3>
-    <div class="tw">
-      <table>
-        <thead><tr><th>التاريخ</th><th>الوقت</th><th>النوع</th><th>المبلغ</th><th>البيان</th><th></th></tr></thead>
-        <tbody>
-          ${rows.length
-            ? rows.map(t => `<tr>
-                <td>${esc(t.date)}</td>
-                <td>${esc(t.time)}</td>
-                <td class="${t.type === 'debt' ? 'amt-d' : 'amt-p'}">${t.type === 'debt' ? 'دين' : 'سداد'}</td>
-                <td class="${t.type === 'debt' ? 'amt-d' : 'amt-p'}">${t.type === 'debt' ? '<span class="ltr">−' + num(t.amount) + '</span>' : num(t.amount)}</td>
-                <td>${esc(t.desc) || '-'}</td>
-                <td class="acts">
-                  <button class="g" data-e="${esc(t.id)}" type="button">تعديل</button>
-                  <button class="g" data-x="${esc(t.id)}" type="button">حذف</button>
-                </td>
-              </tr>`).join('')
-            : '<tr><td colspan="6" class="empty">لا توجد حركات بعد.</td></tr>'}
-        </tbody>
-      </table>
-    </div>`;
+    <h3 class="sec">سجل الحركات</h3>
+    ${rows.length
+      ? '<div class="txl">' + rows.map(t => `
+          <div class="tx">
+            <div class="tx-top">
+              <span class="tx-badge ${t.type === 'debt' ? 'b-d' : 'b-p'}">${t.type === 'debt' ? 'دين' : 'سداد'}</span>
+              <span class="tx-amt ${t.type === 'debt' ? 'amt-d' : 'amt-p'}">${t.type === 'debt' ? '<span class="ltr">−' + num(t.amount) + '</span>' : num(t.amount)}</span>
+            </div>
+            ${t.desc ? '<div class="tx-desc">' + esc(t.desc) + '</div>' : ''}
+            <div class="tx-bot">
+              <span class="tx-date"><span class="ltr">${esc(t.date)}</span> • <span class="ltr">${esc(t.time)}</span></span>
+              <span class="acts">
+                <button class="g" data-e="${esc(t.id)}" type="button">تعديل</button>
+                <button class="g" data-x="${esc(t.id)}" type="button">حذف</button>
+              </span>
+            </div>
+          </div>`).join('') + '</div>'
+      : '<div class="empty box">لا توجد حركات بعد.</div>'}`;
   window.scrollTo(0, 0);
 
   $('bk2').onclick = goBack;
