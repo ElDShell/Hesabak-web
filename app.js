@@ -245,7 +245,7 @@ function entryHtml(c, p) {
       <div class="tg" role="group" aria-label="نوع الحركة">
         <span class="tg-thumb" aria-hidden="true"></span>
         <button type="button" class="tg-b tg-d" data-t="debt" aria-pressed="${type === 'debt'}">دين</button>
-        <button type="button" class="tg-b tg-p" data-t="pay" aria-pressed="${type === 'pay'}">سداد</button>
+        <button type="button" class="tg-b tg-p" data-t="pay" aria-pressed="${type === 'pay'}">تحويل (تسديد)</button>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -434,7 +434,7 @@ function viewList() {
               </div>
               <div class="bal ${owes ? 'neg' : 'z'}">
                 ${owes ? '<span class="ltr">−' + num(b) + '</span>' : (credit ? num(-b) : 'مسدَّد')}
-                ${owes ? '<small>المتبقي</small>' : (credit ? '<small>رصيد له</small>' : '')}
+                ${owes ? '<small>رصيد عليه</small>' : (credit ? '<small>رصيد له</small>' : '')}
               </div>
               <div class="row">
                 <button class="p sm" data-add="${esc(c.id)}" type="button">إضافة حركة</button>
@@ -1027,17 +1027,115 @@ async function showLedgerImage(id) {
 }
 
 /* ------------------------------------------------------------
-   10) تصدير تقرير Excel
+   10) تصدير تقرير Excel — XLSX حقيقي (Office Open XML)
    ------------------------------------------------------------ */
+
+/* جدول CRC32 — يُحسب مرة واحدة عند تحميل السكربت */
+const CRC_TABLE = (function () {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) {
+    c = (c >>> 8) ^ CRC_TABLE[(c ^ bytes[i]) & 0xFF];
+  }
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+/* بناء ملف ZIP بحيث يحتوي على الملفات المعطاة، بدون ضغط (STORED) */
+function makeZip(files) {
+  const enc = new TextEncoder();
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const data = (f.data instanceof Uint8Array) ? f.data : enc.encode(f.data);
+    const crc = crc32(data);
+
+    /* Local file header */
+    const lh = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(lh.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);
+    lv.setUint16(6, 0x0800, true);  // UTF-8
+    lv.setUint16(8, 0, true);        // STORED
+    lv.setUint16(10, 0, true);
+    lv.setUint16(12, 0x21, true);
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, data.length, true);
+    lv.setUint32(22, data.length, true);
+    lv.setUint16(26, nameBytes.length, true);
+    lv.setUint16(28, 0, true);
+    lh.set(nameBytes, 30);
+    chunks.push(lh);
+    chunks.push(data);
+
+    /* Central directory header */
+    const ch = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(ch.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);
+    cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0x0800, true);
+    cv.setUint16(10, 0, true);
+    cv.setUint16(12, 0, true);
+    cv.setUint16(14, 0x21, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, data.length, true);
+    cv.setUint32(24, data.length, true);
+    cv.setUint16(28, nameBytes.length, true);
+    cv.setUint16(30, 0, true);
+    cv.setUint16(32, 0, true);
+    cv.setUint16(34, 0, true);
+    cv.setUint16(36, 0, true);
+    cv.setUint32(38, 0, true);
+    cv.setUint32(42, offset, true);
+    ch.set(nameBytes, 46);
+    central.push(ch);
+
+    offset += lh.length + data.length;
+  }
+
+  const centralSize = central.reduce((s, c) => s + c.length, 0);
+
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(4, 0, true);
+  ev.setUint16(6, 0, true);
+  ev.setUint16(8, files.length, true);
+  ev.setUint16(10, files.length, true);
+  ev.setUint32(12, centralSize, true);
+  ev.setUint32(16, offset, true);
+  ev.setUint16(20, 0, true);
+
+  const total = offset + centralSize + eocd.length;
+  const out = new Uint8Array(total);
+  let p = 0;
+  for (const c of chunks)  { out.set(c, p); p += c.length; }
+  for (const c of central) { out.set(c, p); p += c.length; }
+  out.set(eocd, p);
+  return out;
+}
+
 function exportExcel() {
   if (!customers.length) { toast('لا يوجد مشترون للتصدير'); return; }
 
   const reportDate = nowParts().date;
 
-  /* --- تجهيز صفوف التقرير --- */
+  /* --- تجهيز الصفوف --- */
   const rows = customers.map(c => {
     const b = Math.round(bal(c) * 100) / 100;
-    const last = lastActivity(c);                     // "YYYY-MM-DD HH:MM" أو ""
+    const last = lastActivity(c);
     return {
       name:     c.name,
       count:    c.transactions.length,
@@ -1045,88 +1143,193 @@ function exportExcel() {
       lastTime: last ? last.slice(11, 16) : '',
       debt:     b > 0 ? b : 0,
       credit:   b < 0 ? -b : 0,
-      balance:  b,
       status:   b > 0 ? 'عليه دين' : (b < 0 ? 'رصيد له' : 'مسدَّد')
     };
   });
-
-  // ترتيب: الأكثر دينًا أولاً ثم أبجديًا
   rows.sort((a, b) => (b.debt - a.debt) || a.name.localeCompare(b.name, 'ar'));
 
   const totalDebt   = Math.round(rows.reduce((s, r) => s + r.debt,   0) * 100) / 100;
   const totalCredit = Math.round(rows.reduce((s, r) => s + r.credit, 0) * 100) / 100;
 
-  const cellNum = (v, cls) => {
-    const c = cls ? ('num ' + cls) : 'num';
-    const s = Number(v) ? String(Math.round(Number(v) * 100) / 100) : '';
-    return '<td class="' + c + '">' + s + '</td>';
+  /* --- أدوات XML --- */
+  const X = s => String(s ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;'
+  }[ch]));
+
+  const colLetter = n => {
+    let s = '';
+    while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+    return s;
   };
 
-  /* --- بناء ملف HTML يفتحه Excel --- */
-  let html =
-    '<html xmlns:x="urn:schemas-microsoft-com:office:excel" dir="rtl">' +
-    '<head><meta charset="UTF-8"><style>' +
-    'table{border-collapse:collapse;font-family:Tajawal,Arial,sans-serif}' +
-    'th,td{border:1px solid #c0c0c0;padding:6px 10px;text-align:right;vertical-align:middle;white-space:nowrap}' +
-    'th{background:#0f4c4a;color:#ffffff;font-weight:bold}' +
-    '.title{font-size:16pt;font-weight:bold;color:#0f4c4a;padding:8px 0}' +
-    '.meta{color:#6b7280;font-size:10pt;padding-bottom:8px}' +
-    '.num{mso-number-format:"0\\.00";text-align:left}' +
-    '.debt{color:#c0392b;font-weight:bold}' +
-    '.credit{color:#26734a;font-weight:bold}' +
-    '.ok{color:#26734a}' +
-    '.total{background:#e2ecea;font-weight:bold}' +
-    '</style></head><body>';
+  const cStr = (ref, style, v) =>
+    '<c r="' + ref + '"' + (style ? ' s="' + style + '"' : '') +
+    ' t="inlineStr"><is><t xml:space="preserve">' + X(v) + '</t></is></c>';
 
-  html += '<div class="title">' + esc(projectName) + ' — تقرير المبالغ المتبقية</div>';
-  html += '<div class="meta">' +
-          'تاريخ التقرير: ' + reportDate +
-          '  •  عدد المشترين: ' + rows.length +
-          '  •  إجمالي الديون: ' + totalDebt +
-          '  •  إجمالي أرصدة المشترين: ' + totalCredit +
-          '</div>';
+  const cNum = (ref, style, v) => {
+    const n = Number(v);
+    if (!n) return '<c r="' + ref + '"' + (style ? ' s="' + style + '"' : '') + '/>';
+    return '<c r="' + ref + '"' + (style ? ' s="' + style + '"' : '') +
+           '><v>' + (Math.round(n * 100) / 100) + '</v></c>';
+  };
 
-  html += '<table><thead><tr>' +
-          '<th>#</th>' +
-          '<th>اسم المشتري</th>' +
-          '<th>عدد الحركات</th>' +
-          '<th>تاريخ آخر حركة</th>' +
-          '<th>وقت آخر حركة</th>' +
-          '<th>المتبقي عليه (دين)</th>' +
-          '<th>رصيد له</th>' +
-          '<th>الحالة</th>' +
-          '</tr></thead><tbody>';
+  /* --- صفوف الورقة --- */
+  const sheetRows = [];
+
+  sheetRows.push('<row r="1" ht="26" customHeight="1">' +
+    cStr('A1', 1, projectName + ' — تقرير المبالغ المتبقية') + '</row>');
+
+  const meta = 'تاريخ التقرير: ' + reportDate +
+    '   •   عدد المشترين: ' + rows.length +
+    '   •   إجمالي الديون: ' + totalDebt +
+    '   •   إجمالي أرصدة المشترين: ' + totalCredit;
+  sheetRows.push('<row r="2">' + cStr('A2', 2, meta) + '</row>');
+  sheetRows.push('<row r="3"/>');
+
+  const headers = ['#','اسم المشتري','عدد الحركات','تاريخ آخر حركة','وقت آخر حركة',
+                   'المتبقي عليه (دين)','رصيد له','الحالة'];
+  sheetRows.push('<row r="4" ht="22" customHeight="1">' +
+    headers.map((h, i) => cStr(colLetter(i + 1) + '4', 3, h)).join('') +
+    '</row>');
 
   rows.forEach((r, i) => {
-    const cls = r.balance > 0 ? 'debt' : (r.balance < 0 ? 'credit' : 'ok');
-    html += '<tr>' +
-      '<td>' + (i + 1) + '</td>' +
-      '<td>' + esc(r.name) + '</td>' +
-      '<td class="num">' + r.count + '</td>' +
-      '<td>' + (r.lastDate || '—') + '</td>' +
-      '<td>' + (r.lastTime || '—') + '</td>' +
-      cellNum(r.debt,   'debt') +
-      cellNum(r.credit, 'credit') +
-      '<td class="' + cls + '">' + r.status + '</td>' +
-      '</tr>';
+    const n = 5 + i;
+    sheetRows.push('<row r="' + n + '">' +
+      cStr('A' + n, 0, String(i + 1)) +
+      cStr('B' + n, 0, r.name) +
+      cNum('C' + n, 4, r.count) +
+      cStr('D' + n, 0, r.lastDate || '—') +
+      cStr('E' + n, 0, r.lastTime || '—') +
+      cNum('F' + n, 5, r.debt) +
+      cNum('G' + n, 6, r.credit) +
+      cStr('H' + n, 0, r.status) +
+      '</row>');
   });
 
-  html += '<tr class="total">' +
-          '<td colspan="5">الإجمالي</td>' +
-          cellNum(totalDebt,   'debt') +
-          cellNum(totalCredit, 'credit') +
-          '<td></td>' +
-          '</tr>';
+  const totalRow = 5 + rows.length;
+  sheetRows.push('<row r="' + totalRow + '" ht="22" customHeight="1">' +
+    cStr('A' + totalRow, 7, 'الإجمالي') +
+    cNum('F' + totalRow, 8, totalDebt) +
+    cNum('G' + totalRow, 9, totalCredit) +
+    '</row>');
 
-  html += '</tbody></table></body></html>';
+  /* --- الأوراق الثلاث عشرة (المكوّنات) --- */
+  const sheetXml =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<sheetViews><sheetView rightToLeft="1" tabSelected="1" workbookViewId="0"/></sheetViews>' +
+    '<sheetFormatPr defaultRowHeight="15"/>' +
+    '<cols>' +
+    '<col min="1" max="1" width="6"  customWidth="1"/>' +
+    '<col min="2" max="2" width="26" customWidth="1"/>' +
+    '<col min="3" max="3" width="12" customWidth="1"/>' +
+    '<col min="4" max="4" width="16" customWidth="1"/>' +
+    '<col min="5" max="5" width="10" customWidth="1"/>' +
+    '<col min="6" max="6" width="18" customWidth="1"/>' +
+    '<col min="7" max="7" width="14" customWidth="1"/>' +
+    '<col min="8" max="8" width="14" customWidth="1"/>' +
+    '</cols>' +
+    '<sheetData>' + sheetRows.join('') + '</sheetData>' +
+    '<mergeCells count="3">' +
+      '<mergeCell ref="A1:H1"/>' +
+      '<mergeCell ref="A2:H2"/>' +
+      '<mergeCell ref="A' + totalRow + ':E' + totalRow + '"/>' +
+    '</mergeCells>' +
+    '</worksheet>';
+
+  const stylesXml =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.00"/></numFmts>' +
+    '<fonts count="7">' +
+      '<font><sz val="11"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="15"/><color rgb="FF0F4C4A"/><name val="Calibri"/></font>' +
+      '<font><sz val="10"/><color rgb="FF6B7280"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="11"/><color rgb="FFC0392B"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="11"/><color rgb="FF26734A"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="11"/><name val="Calibri"/></font>' +
+    '</fonts>' +
+    '<fills count="4">' +
+      '<fill><patternFill patternType="none"/></fill>' +
+      '<fill><patternFill patternType="gray125"/></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="FF0F4C4A"/><bgColor indexed="64"/></patternFill></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="FFE2ECEA"/><bgColor indexed="64"/></patternFill></fill>' +
+    '</fills>' +
+    '<borders count="2">' +
+      '<border><left/><right/><top/><bottom/><diagonal/></border>' +
+      '<border>' +
+        '<left style="thin"><color rgb="FFC0C0C0"/></left>' +
+        '<right style="thin"><color rgb="FFC0C0C0"/></right>' +
+        '<top style="thin"><color rgb="FFC0C0C0"/></top>' +
+        '<bottom style="thin"><color rgb="FFC0C0C0"/></bottom>' +
+        '<diagonal/>' +
+      '</border>' +
+    '</borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="10">' +
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+      '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+      '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+      '<xf numFmtId="0" fontId="3" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>' +
+      '<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>' +
+      '<xf numFmtId="164" fontId="4" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>' +
+      '<xf numFmtId="164" fontId="5" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>' +
+      '<xf numFmtId="0" fontId="6" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+      '<xf numFmtId="164" fontId="4" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>' +
+      '<xf numFmtId="164" fontId="5" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>' +
+    '</cellXfs>' +
+    '</styleSheet>';
+
+  const contentTypes =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+    '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+    '</Types>';
+
+  const rootRels =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+    '</Relationships>';
+
+  const workbookXml =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+    '<sheets><sheet name="التقرير" sheetId="1" r:id="rId1"/></sheets>' +
+    '</workbook>';
+
+  const workbookRels =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+    '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+    '</Relationships>';
+
+  /* --- تجميع الملف --- */
+  const zipBytes = makeZip([
+    { name: '[Content_Types].xml',      data: contentTypes },
+    { name: '_rels/.rels',              data: rootRels },
+    { name: 'xl/workbook.xml',          data: workbookXml },
+    { name: 'xl/_rels/workbook.xml.rels', data: workbookRels },
+    { name: 'xl/styles.xml',            data: stylesXml },
+    { name: 'xl/worksheets/sheet1.xml', data: sheetXml }
+  ]);
 
   /* --- التنزيل --- */
-  const blob = new Blob(['\ufeff' + html], { type: 'application/vnd.ms-excel;charset=utf-8' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
+  const blob = new Blob([zipBytes], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
   const safeName = projectName.replace(/[\\/:*?"<>|]/g, '').trim() || 'المعاملات';
-  a.href     = url;
-  a.download = 'تقرير-' + safeName + '-' + reportDate + '.xls';
+  a.href = url;
+  a.download = 'تقرير-' + safeName + '-' + reportDate + '.xlsx';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
