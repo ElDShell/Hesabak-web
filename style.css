@@ -95,8 +95,19 @@ label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
 .cust{
   background:var(--card);border:1px solid var(--border);border-radius:10px;
   padding:14px;margin-bottom:10px;
-  display:flex;justify-content:space-between;align-items:center;gap:8px;
 }
+.ct{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
+.ct .inf{flex:1 1 90px;min-width:0}
+.ct .row{margin-inline-start:auto}
+/* لوحة «عرض السجل» التي تنزلق عند الضغط على الشريط */
+.cm{display:grid;grid-template-rows:0fr;transition:grid-template-rows .3s ease}
+.cm .cmi{min-height:0;overflow:hidden;visibility:hidden;transition:visibility 0s linear .3s}
+.cm .cmi>div{padding-top:12px}
+.cust.open .cm{grid-template-rows:1fr}
+.cust.open .cm .cmi{visibility:visible;transition-delay:0s}
+.cust.open{border-color:var(--brand)}
+.bal.neg{color:var(--danger)}
+.ltr{direction:ltr;unicode-bidi:isolate;display:inline-block}
 .cust .nm{font-weight:700;font-size:16px}
 .cust small{color:var(--muted);font-size:12px}
 .bal{font-weight:700;text-align:end;white-space:nowrap}
@@ -145,6 +156,7 @@ tr:last-child td{border-bottom:none}
 
 /* ---------- التنبيهات العائمة ---------- */
 .toast{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
   position:fixed;inset-inline:16px;
   bottom:calc(20px + env(safe-area-inset-bottom,0px));
   max-width:400px;margin:0 auto;
@@ -152,5 +164,33 @@ tr:last-child td{border-bottom:none}
   padding:10px 14px;border-radius:10px;z-index:60;text-align:center;
 }
 
+/* ---------- بطاقة قابلة للضغط ---------- */
+.cust{cursor:pointer;transition:background .15s}
+.cust:active{background:var(--tint)}
+
+/* ---------- إدخال سريع ---------- */
+/* مفتاح التبديل بين دين وسداد */
+.entry{--c:var(--danger)}
+.entry[data-type="pay"]{--c:var(--ok)}
+.tg{position:relative;display:grid;grid-template-columns:1fr 1fr;padding:4px;margin-bottom:12px;
+  background:var(--tint);border:1px solid var(--border);border-radius:12px}
+.tg-thumb{position:absolute;top:4px;bottom:4px;inset-inline-start:4px;width:calc(50% - 4px);
+  background:var(--card);border:2px solid var(--c);border-radius:9px;
+  box-shadow:0 2px 6px rgba(0,0,0,.14);
+  transition:transform .35s cubic-bezier(.34,1.4,.64,1),border-color .25s}
+.entry[data-type="pay"] .tg-thumb{transform:translateX(-100%)}
+.tg-b{position:relative;z-index:1;background:transparent;padding:11px 0;font-size:16px;font-weight:700;
+  opacity:.5;transition:opacity .2s,transform .3s}
+.tg-b[aria-pressed="true"]{opacity:1;transform:scale(1.08)}
+.tg-d{color:var(--danger)}
+.tg-p{color:var(--ok)}
+.entry .amin{border-color:var(--c);transition:border-color .25s}
+.pv{min-height:20px;font-size:13px;color:var(--muted);margin:-2px 0 8px}
+.sbtn{width:100%;background:var(--c);color:var(--onbrand);padding:14px;font-size:16px;font-weight:700;
+  transition:background .25s,opacity .15s}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:-2px 0 10px}
+.chip{padding:5px 12px;font-size:12px;border-radius:99px;background:var(--tint);color:var(--ink);border:1px solid var(--border)}
+
 /* ---------- أدوات ---------- */
+.toast button{background:transparent;color:inherit;border:1px solid currentColor;padding:4px 12px;font-size:13px;font-weight:700}
 .hide{display:none !important}

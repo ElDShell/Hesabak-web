@@ -1,6 +1,6 @@
 /* ============================================================
    سجل المعاملات — منطق التطبيق
-   الإصدار 4 — توليد صورة PNG للسجل (بدل QR)
+   الإصدار 6 — شريط قابل للتوسّع + مفتاح دين/سداد + إشارات المبالغ
    ============================================================ */
 (function () {
 'use strict';
@@ -44,6 +44,7 @@ let customers = [];
 let cur = null;
 let q = '';
 let type = 'debt';
+let openId = null;
 
 /* ------------------------------------------------------------
    4) التخزين
@@ -85,17 +86,28 @@ function load() {
 function save() { store('s', JSON.stringify(customers)); }
 
 const bal = c =>
-  c.transactions.reduce((a, t) => a + (t.type === 'debt' ? t.amount : -t.amount), 0);
+  Math.round(c.transactions.reduce((a, t) => a + (t.type === 'debt' ? t.amount : -t.amount), 0) * 100) / 100;
 
 /* ------------------------------------------------------------
    5) Toast + Modal
    ------------------------------------------------------------ */
-function toast(msg) {
+function toast(msg, label, fn) {
   const t = $('t');
-  t.textContent = msg;
+  t.innerHTML = '';
+  const sp = document.createElement('span');
+  sp.style.flex = '1';
+  sp.textContent = msg;
+  t.appendChild(sp);
+  if (label && fn) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.onclick = () => { t.classList.add('hide'); fn(); };
+    t.appendChild(b);
+  }
   t.classList.remove('hide');
   clearTimeout(toast.h);
-  toast.h = setTimeout(() => t.classList.add('hide'), 3500);
+  toast.h = setTimeout(() => t.classList.add('hide'), fn ? 6000 : 3500);
 }
 
 function modal(html) {
@@ -122,6 +134,118 @@ function confirmBox(title, text, okLabel, fn) {
 }
 
 /* ------------------------------------------------------------
+   5.5) التنقل + الإدخال السريع
+   ------------------------------------------------------------ */
+function openDetail(id) {
+  try { history.pushState({ d: 1 }, ''); } catch (e) {}
+  viewDetail(id, false);
+}
+function goBack() {
+  if (history.state && history.state.d) history.back();
+  else viewList();
+}
+window.addEventListener('popstate', () => { closeM(); viewList(); });
+
+// آخر 5 بيانات استُخدمت لهذا المشتري (لإدخالها بنقرة واحدة)
+function recentDescs(c) {
+  const seen = new Set(), out = [];
+  [...c.transactions]
+    .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time))
+    .forEach(t => {
+      const d = (t.desc || '').trim();
+      if (d && !seen.has(d) && out.length < 5) { seen.add(d); out.push(d); }
+    });
+  return out;
+}
+
+function entryHtml(c, p) {
+  const r = recentDescs(c);
+  const chips = r.length
+    ? '<div class="chips">' + r.map(d =>
+        '<button type="button" class="chip" data-chip="' + esc(d) + '">' + esc(d) + '</button>').join('') + '</div>'
+    : '';
+  return `
+    <div class="entry" data-type="${type}">
+      <div class="tg" role="group" aria-label="نوع الحركة">
+        <span class="tg-thumb" aria-hidden="true"></span>
+        <button type="button" class="tg-b tg-d" data-t="debt" aria-pressed="${type === 'debt'}">دين</button>
+        <button type="button" class="tg-b tg-p" data-t="pay" aria-pressed="${type === 'pay'}">سداد</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><label for="${p}am">المبلغ</label>
+          <input id="${p}am" class="amin" type="number" inputmode="decimal" min="0" step="any" enterkeyhint="done"></div>
+        <div><label for="${p}ds">البيان (اختياري)</label>
+          <input id="${p}ds" autocomplete="off" enterkeyhint="done"></div>
+      </div>
+      ${chips}
+      <div class="pv" id="${p}pv" aria-live="polite"></div>
+      <button class="sbtn" id="${p}sb" type="button">${type === 'debt' ? 'إضافة دين' : 'إضافة سداد'}</button>
+    </div>`;
+}
+
+function wireEntry(c, p, onDone) {
+  const am = $(p + 'am'), ds = $(p + 'ds'), sb = $(p + 'sb'), pv = $(p + 'pv');
+  const ent = am.closest('.entry');
+
+  // تحديث الألوان والنص والمعاينة (بدون إعادة رسم كي تظهر حركة التبديل)
+  const paint = () => {
+    ent.dataset.type = type;
+    ent.querySelectorAll('.tg-b').forEach(b =>
+      b.setAttribute('aria-pressed', String(b.dataset.t === type)));
+    sb.textContent = type === 'debt' ? 'إضافة دين' : 'إضافة سداد';
+    const a = parseFloat(am.value);
+    pv.innerHTML = a > 0
+      ? 'سيُسجَّل: <b class="ltr ' + (type === 'debt' ? 'amt-d' : 'amt-p') + '">' +
+        (type === 'debt' ? '−' : '') + num(a) + '</b>'
+      : '';
+  };
+
+  const submit = () => {
+    const a = parseFloat(am.value);
+    if (!(a > 0)) { toast('أدخل مبلغًا أكبر من صفر'); am.focus(); return; }
+    const n = nowParts();
+    const tx = { id: uid(), type, amount: a, desc: ds.value.trim(), date: n.date, time: n.time };
+    c.transactions.push(tx);
+    save();
+    onDone(tx);
+  };
+
+  ent.querySelectorAll('.tg-b').forEach(b => b.onclick = () => { type = b.dataset.t; paint(); });
+  am.oninput = paint;
+  sb.onclick = submit;
+  [am, ds].forEach(el => el.onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+  });
+  ent.querySelectorAll('[data-chip]').forEach(b => b.onclick = () => {
+    ds.value = (ds.value === b.dataset.chip) ? '' : b.dataset.chip;
+    if (!am.value) am.focus();
+  });
+  paint();
+}
+
+function undoAdd(cid, txid, refresh) {
+  const c = customers.find(x => x.id === cid);
+  if (!c) return;
+  c.transactions = c.transactions.filter(t => t.id !== txid);
+  save(); refresh(); toast('تم التراجع');
+}
+
+// نافذة إضافة حركة سريعة من القائمة
+function quickAdd(id) {
+  const c = customers.find(x => x.id === id);
+  if (!c) return;
+  modal('<h3>' + esc(c.name) + ' — إضافة حركة</h3>' + entryHtml(c, 'q') +
+        '<button class="g" style="width:100%;margin-top:8px" id="qx" type="button">إلغاء</button>');
+  $('qx').onclick = closeM;
+  wireEntry(c, 'q', tx => {
+    closeM(); viewList();
+    toast((tx.type === 'debt' ? 'دين ' : 'سداد ') + num(tx.amount) + ' — ' + c.name,
+          'تراجع', () => undoAdd(id, tx.id, viewList));
+  });
+  $('qam').focus();
+}
+
+/* ------------------------------------------------------------
    6) عرض قائمة المشترين
    ------------------------------------------------------------ */
 function viewList() {
@@ -142,28 +266,35 @@ function viewList() {
     </div>
     <div id="af" class="box hide">
       <h3>مشترٍ جديد</h3>
-      <input id="nn" placeholder="اسم المشتري" aria-label="اسم المشتري">
+      <input id="nn" placeholder="اسم المشتري" aria-label="اسم المشتري" enterkeyhint="done">
       <div class="row">
         <button class="p" id="sv" style="flex:1" type="button">حفظ</button>
         <button class="o" id="cn" type="button">إلغاء</button>
       </div>
     </div>
+    ${list.length ? '<div class="note" style="margin:0 0 8px">اضغط على المشتري لإظهار «عرض السجل»</div>' : ''}
     ${list.length
       ? list.map(c => {
           const b = bal(c);
-          return `<div class="cust">
-            <div>
-              <div class="nm">${esc(c.name)}</div>
-              <small>${num(c.transactions.length)} حركة</small>
+          const owes = b > 0, credit = b < 0;
+          return `<div class="cust${c.id === openId ? ' open' : ''}" data-id="${esc(c.id)}" role="button" tabindex="0" aria-expanded="${c.id === openId}">
+            <div class="ct">
+              <div class="inf">
+                <div class="nm">${esc(c.name)}</div>
+                <small>${num(c.transactions.length)} حركة</small>
+              </div>
+              <div class="bal ${owes ? 'neg' : 'z'}">
+                ${owes ? '<span class="ltr">−' + num(b) + '</span>' : (credit ? num(-b) : 'مسدَّد')}
+                ${owes ? '<small>المتبقي</small>' : (credit ? '<small>رصيد له</small>' : '')}
+              </div>
+              <div class="row">
+                <button class="p sm" data-add="${esc(c.id)}" type="button">إضافة حركة</button>
+                <button class="o sm" data-img="${esc(c.id)}" type="button">صورة</button>
+              </div>
             </div>
-            <div class="bal ${b <= 0 ? 'z' : ''}">
-              ${b <= 0 ? 'مسدَّد' : num(b)}
-              <small>${b < 0 ? 'رصيد له ' + num(-b) : 'المتبقي'}</small>
-            </div>
-            <div class="row">
-              <button class="p sm" data-o="${esc(c.id)}" type="button">السجل</button>
-              <button class="o sm" data-img="${esc(c.id)}" type="button">صورة</button>
-            </div>
+            <div class="cm"><div class="cmi"><div>
+              <button class="p" style="width:100%" data-view="${esc(c.id)}" type="button">عرض السجل</button>
+            </div></div></div>
           </div>`;
         }).join('')
       : '<div class="empty">لا يوجد مشترون هنا.<br>اضغط «مشترٍ جديد» للبدء.</div>'}`;
@@ -176,20 +307,39 @@ function viewList() {
   };
   $('add').onclick = () => { $('af').classList.remove('hide'); $('nn').focus(); };
   $('cn').onclick  = () => $('af').classList.add('hide');
-  $('sv').onclick  = () => {
+  const saveCustomer = () => {
     const n = $('nn').value.trim();
     if (!n) { toast('أدخل اسم المشتري'); return; }
-    customers.unshift({ id: uid(), name: n, transactions: [] });
-    save(); viewList(); toast('تمت إضافة المشتري');
+    const nc = { id: uid(), name: n, transactions: [] };
+    customers.unshift(nc);
+    q = '';
+    save(); viewList(); quickAdd(nc.id);   // بعد الإضافة تفتح نافذة الحركة مباشرة
   };
-  document.querySelectorAll('[data-o]').forEach(b => b.onclick = () => viewDetail(b.dataset.o));
-  document.querySelectorAll('[data-img]').forEach(b => b.onclick = () => showLedgerImage(b.dataset.img));
+  $('sv').onclick = saveCustomer;
+  $('nn').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); saveCustomer(); } };
+  document.querySelectorAll('.cust').forEach(card => {
+    const toggle = () => {
+      const willOpen = !card.classList.contains('open');
+      document.querySelectorAll('.cust.open').forEach(x => {
+        x.classList.remove('open'); x.setAttribute('aria-expanded', 'false');
+      });
+      if (willOpen) { card.classList.add('open'); card.setAttribute('aria-expanded', 'true'); }
+      openId = willOpen ? card.dataset.id : null;
+    };
+    card.onclick = toggle;
+    card.onkeydown = e => {
+      if (e.target === card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); }
+    };
+  });
+  document.querySelectorAll('[data-view]').forEach(b => b.onclick = e => { e.stopPropagation(); openDetail(b.dataset.view); });
+  document.querySelectorAll('[data-add]').forEach(b => b.onclick = e => { e.stopPropagation(); quickAdd(b.dataset.add); });
+  document.querySelectorAll('[data-img]').forEach(b => b.onclick = e => { e.stopPropagation(); showLedgerImage(b.dataset.img); });
 }
 
 /* ------------------------------------------------------------
    7) تفاصيل المشتري
    ------------------------------------------------------------ */
-function viewDetail(id) {
+function viewDetail(id, focusAmount) {
   cur = id;
   const c = customers.find(x => x.id === id);
   if (!c) { viewList(); return; }
@@ -207,19 +357,11 @@ function viewDetail(id) {
     <h2 style="margin:0 0 4px;color:var(--brand)">${esc(c.name)}</h2>
     <div class="sum">
       <small>${b < 0 ? 'رصيد للمشتري' : 'المتبقي عليه'}</small>
-      <div class="big">${num(Math.abs(b))}</div>
+      <div class="big">${b > 0 ? '<span class="ltr">−' + num(b) + '</span>' : num(Math.abs(b))}</div>
     </div>
     <div class="box">
       <h3>إضافة حركة</h3>
-      <div class="seg">
-        <button id="td" aria-pressed="${type === 'debt'}" type="button">دين (عليه)</button>
-        <button id="tp" aria-pressed="${type === 'pay'}" type="button">سداد (دفعة)</button>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div><label for="am">المبلغ</label><input id="am" type="number" inputmode="decimal" min="0" step="any"></div>
-        <div><label for="ds">البيان (اختياري)</label><input id="ds"></div>
-      </div>
-      <button class="p" id="at" style="width:100%" type="button">إضافة الحركة</button>
+      ${entryHtml(c, 'n')}
     </div>
     <h3 style="font-size:15px;margin:0 0 6px">سجل الحركات</h3>
     <div class="tw">
@@ -230,8 +372,8 @@ function viewDetail(id) {
             ? rows.map(t => `<tr>
                 <td>${esc(t.date)}</td>
                 <td>${esc(t.time)}</td>
-                <td>${t.type === 'debt' ? 'دين' : 'سداد'}</td>
-                <td class="${t.type === 'debt' ? 'amt-d' : 'amt-p'}">${num(t.amount)}</td>
+                <td class="${t.type === 'debt' ? 'amt-d' : 'amt-p'}">${t.type === 'debt' ? 'دين' : 'سداد'}</td>
+                <td class="${t.type === 'debt' ? 'amt-d' : 'amt-p'}">${t.type === 'debt' ? '<span class="ltr">−' + num(t.amount) + '</span>' : num(t.amount)}</td>
                 <td>${esc(t.desc) || '-'}</td>
                 <td class="acts">
                   <button class="g" data-e="${esc(t.id)}" type="button">تعديل</button>
@@ -244,17 +386,14 @@ function viewDetail(id) {
     </div>`;
   window.scrollTo(0, 0);
 
-  $('bk2').onclick = viewList;
+  $('bk2').onclick = goBack;
   $('img').onclick = () => showLedgerImage(id);
-  $('td').onclick = () => { type = 'debt'; viewDetail(id); };
-  $('tp').onclick = () => { type = 'pay';  viewDetail(id); };
-  $('at').onclick = () => {
-    const a = parseFloat($('am').value);
-    if (!(a > 0)) { toast('أدخل مبلغًا أكبر من صفر'); return; }
-    const p = nowParts();
-    c.transactions.push({ id: uid(), type, amount: a, desc: $('ds').value.trim(), date: p.date, time: p.time });
-    save(); viewDetail(id); toast('تمت إضافة الحركة');
-  };
+  wireEntry(c, 'n', tx => {
+    viewDetail(id, true);
+    toast((tx.type === 'debt' ? 'تم تسجيل دين ' : 'تم تسجيل سداد ') + num(tx.amount),
+          'تراجع', () => undoAdd(id, tx.id, () => viewDetail(id)));
+  });
+  if (focusAmount) $('nam').focus({ preventScroll: true });
   $('ed').onclick = () => {
     modal(`<h3>تعديل الاسم</h3><input id="en" value="${esc(c.name)}" aria-label="الاسم">
       <div class="row">
@@ -272,13 +411,23 @@ function viewDetail(id) {
     'حذف المشتري نهائيًا؟',
     'سيُحذف ' + c.name + ' وكل حركاته، ولا يمكن التراجع.',
     'حذف نهائي',
-    () => { customers = customers.filter(x => x.id !== id); save(); viewList(); toast('تم الحذف'); }
+    () => { customers = customers.filter(x => x.id !== id); save(); goBack(); toast('تم الحذف'); }
   );
   document.querySelectorAll('[data-x]').forEach(b => {
-    b.onclick = () => confirmBox('حذف هذه الحركة؟', 'لا يمكن التراجع.', 'حذف', () => {
-      c.transactions = c.transactions.filter(t => t.id !== b.dataset.x);
-      save(); viewDetail(id); toast('تم حذف الحركة');
-    });
+    b.onclick = () => {
+      const i = c.transactions.findIndex(t => t.id === b.dataset.x);
+      if (i < 0) return;
+      const removed = c.transactions.splice(i, 1)[0];
+      save(); viewDetail(id);
+      toast('تم حذف الحركة', 'تراجع', () => {
+        const cc = customers.find(x => x.id === id);
+        if (!cc) return;
+        cc.transactions.splice(Math.min(i, cc.transactions.length), 0, removed);
+        save();
+        if (cur === id) viewDetail(id); else viewList();
+        toast('تم استرجاع الحركة');
+      });
+    };
   });
   document.querySelectorAll('[data-e]').forEach(b => {
     b.onclick = () => {
@@ -309,7 +458,7 @@ function viewDetail(id) {
 }
 
 /* ============================================================
-   8) توليد صورة السجل (الجزء الجديد)
+   8) توليد صورة السجل
    ============================================================ */
 
 /** مستطيل بأطراف دائرية */
@@ -359,7 +508,7 @@ async function generateLedgerImage(customer) {
 
   let cum = 0;
   const withBalance = sorted.map(t => {
-    cum += (t.type === 'debt' ? t.amount : -t.amount);
+    cum = Math.round((cum + (t.type === 'debt' ? t.amount : -t.amount)) * 100) / 100;
     return Object.assign({}, t, { balance: cum });
   });
 
@@ -480,7 +629,7 @@ async function generateLedgerImage(customer) {
   ctx.fillText('إجمالي الحركات: ' + total, leftX + 35, y + 55);
 
   // الرقم الكبير (مع تصغير تلقائي إن كان طويلًا)
-  const balText = numImg(Math.abs(finalBalance));
+  const balText = isDebtor ? '−' + numImg(finalBalance) : numImg(Math.abs(finalBalance));
   const maxBalW = W - PAD * 2 - 70;
   let balFontSize = 84;
   ctx.font = '700 ' + balFontSize + 'px Tajawal, Tahoma, sans-serif';
@@ -496,9 +645,6 @@ async function generateLedgerImage(customer) {
   y += H_BALANCE;
 
   /* ===== 4. الجدول ===== */
-  /* عرض الأعمدة (من اليمين إلى اليسار)
-     التاريخ | المبلغ | الملاحظات | الرصيد
-     200     | 200   | 320       | 260   = 980 */
   const CONTENT_W = W - PAD * 2;
   const COL_DATE_W    = 200;
   const COL_AMOUNT_W  = 200;
@@ -520,10 +666,10 @@ async function generateLedgerImage(customer) {
   ctx.textAlign = 'right';
   ctx.font = '700 26px Tajawal, Tahoma, sans-serif';
   const headY = y + H_TABLE_HEAD / 2;
-  ctx.fillText('التاريخ',      colDateRight   - 15, headY);
-  ctx.fillText('المبلغ',       colAmountRight - 15, headY);
-  ctx.fillText('الملاحظات',    colNotesRight  - 15, headY);
-  ctx.fillText('الرصيد المتراكم', colBalRight  - 15, headY);
+  ctx.fillText('التاريخ',         colDateRight   - 15, headY);
+  ctx.fillText('المبلغ',          colAmountRight - 15, headY);
+  ctx.fillText('الملاحظات',       colNotesRight  - 15, headY);
+  ctx.fillText('الرصيد المتراكم', colBalRight    - 15, headY);
 
   y += H_TABLE_HEAD;
 
@@ -546,10 +692,10 @@ async function generateLedgerImage(customer) {
 
     // المبلغ (مع إشارة + أو −)
     const amtColor = t.type === 'debt' ? C.debt : C.pay;
-    const amtSign  = t.type === 'debt' ? '+' : '−';
+    const amtSign  = t.type === 'debt' ? '−' : '';
     ctx.fillStyle = amtColor;
     ctx.font = '700 26px Tajawal, Tahoma, sans-serif';
-    ctx.fillText(amtSign + ' ' + numImg(t.amount), colAmountRight - 15, cy);
+    ctx.fillText(amtSign + numImg(t.amount), colAmountRight - 15, cy);
 
     // الملاحظات (مع اقتطاع)
     ctx.fillStyle = C.muted;
@@ -562,7 +708,7 @@ async function generateLedgerImage(customer) {
     ctx.fillStyle = t.balance > 0 ? C.debt : (t.balance < 0 ? C.pay : C.muted);
     ctx.font = '500 24px Tajawal, Tahoma, sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText(numImg(t.balance), colBalRight - 15, cy);
+    ctx.fillText((t.balance > 0 ? '−' : '') + numImg(Math.abs(t.balance)), colBalRight - 15, cy);
 
     // خط فاصل بين الصفوف
     if (i < rowsShown.length - 1) {
@@ -587,7 +733,6 @@ async function generateLedgerImage(customer) {
   }
 
   /* ===== 5. التذييل ===== */
-  // خط فاصل علوي
   ctx.strokeStyle = C.border;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
@@ -595,13 +740,11 @@ async function generateLedgerImage(customer) {
   ctx.lineTo(W - PAD, y + 25);
   ctx.stroke();
 
-  // علامة المشروع (يمين)
   ctx.fillStyle = C.brand;
   ctx.textAlign = 'right';
   ctx.font = '700 22px Tajawal, Tahoma, sans-serif';
   ctx.fillText('سجل المعاملات — ' + PROJECT_NAME, rightX, y + 65);
 
-  // تاريخ الطباعة (يسار)
   ctx.fillStyle = C.muted;
   ctx.textAlign = 'left';
   ctx.font = '400 20px Tajawal, Tahoma, sans-serif';
@@ -659,7 +802,6 @@ async function showLedgerImage(id) {
     '</div>'
   );
 
-  // جعل النافذة أوسع للصورة
   const mc = document.querySelector('#m .mc');
   if (mc) { mc.style.maxWidth = '520px'; mc.style.padding = '16px'; }
 
@@ -668,12 +810,10 @@ async function showLedgerImage(id) {
     try {
       const file = new File([blob], filename, { type: 'image/png' });
 
-      // المسار المفضّل: مشاركة كملف (يدعم واتساب مباشرة)
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: 'سجل ' + c.name });
         return;
       }
-      // مسار احتياطي: مشاركة الرابط
       if (navigator.share) {
         await navigator.share({ title: 'سجل ' + c.name, url: url });
         return;
@@ -684,7 +824,7 @@ async function showLedgerImage(id) {
     }
   };
 
-  /* -- تنزيل (يعمل على أندرويد وسطح المكتب) -- */
+  /* -- تنزيل -- */
   $('dl').onclick = () => {
     const a = document.createElement('a');
     a.href = url;
