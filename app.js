@@ -1,6 +1,6 @@
 /* ============================================================
    سجل المعاملات — منطق التطبيق
-   الإصدار 8 — فلاتر متعددة + ترتيب متقدم + تاريخ/وقت قابل للتعديل
+   الإصدار 9 — اسم مشروع قابل للتعديل + Excel فقط
    ============================================================ */
 (function () {
 'use strict';
@@ -33,7 +33,6 @@ const nowParts = () => {
    ------------------------------------------------------------ */
 const IMG_WIDTH = 1080;
 const IMG_MAX_ROWS = 15;
-const PROJECT_NAME = 'مشروع 1';
 
 /* ------------------------------------------------------------
    3) حالة التطبيق
@@ -55,6 +54,23 @@ const DEFAULT_FILTERS = () => ({
 });
 let filters = DEFAULT_FILTERS();
 let fpOpen = false;
+
+/* ------------------------------------------------------------
+   3.6) اسم المشروع
+   ------------------------------------------------------------ */
+const PROJECT_KEY     = 'ledger_project_name';
+const PROJECT_DEFAULT = 'مشروع 1';
+let projectName = PROJECT_DEFAULT;
+
+function loadProjectName() {
+  try {
+    const v = localStorage.getItem(PROJECT_KEY);
+    if (v && v.trim()) projectName = v.trim();
+  } catch (e) {}
+}
+function saveProjectName() {
+  try { localStorage.setItem(PROJECT_KEY, projectName); } catch (e) {}
+}
 
 function filtersCount() {
   let n = 0;
@@ -761,7 +777,7 @@ async function generateLedgerImage(customer) {
   ctx.fillStyle = C.brand;
   ctx.textAlign = 'right';
   ctx.font = '700 46px Tajawal, Tahoma, sans-serif';
-  ctx.fillText(PROJECT_NAME, rightX, y + H_HEADER / 2);
+  ctx.fillText(projectName, rightX, y + H_HEADER / 2);
 
   ctx.fillStyle = C.muted;
   ctx.textAlign = 'left';
@@ -915,7 +931,7 @@ async function generateLedgerImage(customer) {
   ctx.fillStyle = C.brand;
   ctx.textAlign = 'right';
   ctx.font = '700 22px Tajawal, Tahoma, sans-serif';
-  ctx.fillText('سجل المعاملات — ' + PROJECT_NAME, rightX, y + 65);
+  ctx.fillText('سجل المعاملات — ' + projectName, rightX, y + 65);
 
   ctx.fillStyle = C.muted;
   ctx.textAlign = 'left';
@@ -1011,9 +1027,6 @@ async function showLedgerImage(id) {
 }
 
 /* ------------------------------------------------------------
-   10) النسخة الاحتياطية
-   ------------------------------------------------------------ */
-/* ------------------------------------------------------------
    10) تصدير تقرير Excel
    ------------------------------------------------------------ */
 function exportExcel() {
@@ -1065,7 +1078,7 @@ function exportExcel() {
     '.total{background:#e2ecea;font-weight:bold}' +
     '</style></head><body>';
 
-  html += '<div class="title">سجل المعاملات — تقرير المبالغ المتبقية</div>';
+  html += '<div class="title">' + esc(projectName) + ' — تقرير المبالغ المتبقية</div>';
   html += '<div class="meta">' +
           'تاريخ التقرير: ' + reportDate +
           '  •  عدد المشترين: ' + rows.length +
@@ -1111,8 +1124,9 @@ function exportExcel() {
   const blob = new Blob(['\ufeff' + html], { type: 'application/vnd.ms-excel;charset=utf-8' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
+  const safeName = projectName.replace(/[\\/:*?"<>|]/g, '').trim() || 'المعاملات';
   a.href     = url;
-  a.download = 'تقرير-المعاملات-' + reportDate + '.xls';
+  a.download = 'تقرير-' + safeName + '-' + reportDate + '.xls';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1120,6 +1134,58 @@ function exportExcel() {
   toast('تم تنزيل تقرير Excel');
 }
 
+/* ------------------------------------------------------------
+   10.6) تعديل اسم المشروع
+   ------------------------------------------------------------ */
+function renderProjectName() {
+  const el = $('pt');
+  if (el) el.textContent = projectName;
+}
+
+function editProjectName() {
+  modal(`<h3>اسم المشروع</h3>
+    <p class="note" style="margin-bottom:10px">
+      يظهر في رأس القائمة وفي تقرير Excel وفي صورة السجل.
+    </p>
+    <input id="pni" value="${esc(projectName)}" maxlength="40"
+           aria-label="اسم المشروع" enterkeyhint="done" autocomplete="off">
+    <div class="row">
+      <button class="g" style="flex:1" id="no" type="button">إلغاء</button>
+      <button class="p" style="flex:1" id="ok" type="button">حفظ</button>
+    </div>`);
+
+  const input = $('pni');
+  input.focus();
+  input.select();
+
+  const commit = () => {
+    const v = input.value.trim();
+    if (!v) { toast('أدخل اسمًا للمشروع'); input.focus(); return; }
+    projectName = v;
+    saveProjectName();
+    renderProjectName();
+    closeM();
+    toast('تم تحديث اسم المشروع');
+  };
+
+  $('no').onclick = closeM;
+  $('ok').onclick = commit;
+  input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
+}
+
+function setupProjectName() {
+  const el = $('pt');
+  if (!el) return;
+  renderProjectName();
+  el.onclick = editProjectName;
+  el.onkeydown = e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); editProjectName(); }
+  };
+}
+
+/* ------------------------------------------------------------
+   10.7) نافذة النسخة الاحتياطية
+   ------------------------------------------------------------ */
 function setupBackup() {
   $('bk').onclick = () => {
     modal(`<h3>النسخة الاحتياطية</h3>
@@ -1133,6 +1199,7 @@ function setupBackup() {
     $('no').onclick = closeM;
   };
 }
+
 /* ------------------------------------------------------------
    11) الثيم
    ------------------------------------------------------------ */
@@ -1149,6 +1216,8 @@ function setupTheme() {
    12) الإقلاع
    ------------------------------------------------------------ */
 load();
+loadProjectName();
+setupProjectName();
 setupBackup();
 setupTheme();
 viewList();

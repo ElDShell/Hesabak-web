@@ -282,3 +282,33 @@ input[type="date"],
 input[type="time"]{
   padding-inline:8px;
 }
+
+/* ============================================================
+   اسم المشروع القابل للتعديل
+   ============================================================ */
+.brand{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+
+.pn{
+  font-size:20px;margin:0;color:var(--brand);
+  cursor:pointer;user-select:none;
+  display:inline-flex;align-items:center;
+  padding:3px 8px;margin-inline-start:-8px;
+  border-radius:8px;
+  max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  align-self:flex-start;
+  transition:background .15s;
+}
+.pn:hover,.pn:focus-visible{background:var(--tint)}
+.pn:active{background:var(--tint)}
+
+.pn::after{
+  content:'✏️';
+  font-size:12px;
+  opacity:.4;
+  margin-inline-start:7px;
+  transition:opacity .2s,transform .2s;
+}
+.pn:hover::after{opacity:1;transform:scale(1.1)}
+
+.sub{font-size:11px;color:var(--muted);padding-inline-start:1px;letter-spacing:.2px}
