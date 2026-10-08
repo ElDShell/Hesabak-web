@@ -194,3 +194,61 @@ tr:last-child td{border-bottom:none}
 /* ---------- أدوات ---------- */
 .toast button{background:transparent;color:inherit;border:1px solid currentColor;padding:4px 12px;font-size:13px;font-weight:700}
 .hide{display:none !important}
+
+/* ============================================================
+   لوحة الفلاتر والترتيب
+   ============================================================ */
+.fp{
+  background:var(--card);border:1px solid var(--border);border-radius:10px;
+  margin-bottom:12px;overflow:hidden;
+  transition:border-color .25s;
+}
+.fp.open{border-color:var(--brand)}
+.fp-h{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:11px 14px;cursor:pointer;user-select:none;
+}
+.fp-h:active{background:var(--tint)}
+.fp-h .t{
+  font-weight:700;font-size:14px;color:var(--brand);
+  display:flex;align-items:center;gap:8px;
+}
+.fp-h .c{
+  background:var(--brand);color:var(--onbrand);
+  font-size:11px;font-weight:700;
+  min-width:20px;height:20px;padding:0 7px;
+  display:inline-flex;align-items:center;justify-content:center;
+  border-radius:99px;
+}
+.fp-h .ic{color:var(--muted);font-size:12px;transition:transform .3s}
+.fp.open .fp-h .ic{transform:rotate(180deg)}
+
+.fp-b{display:grid;grid-template-rows:0fr;transition:grid-template-rows .3s ease}
+.fp.open .fp-b{grid-template-rows:1fr}
+.fp-bi{min-height:0;overflow:hidden}
+.fp-bi>div{padding:2px 14px 14px;border-top:1px solid var(--border)}
+
+.fg{margin-top:12px}
+.fg:first-child{margin-top:10px}
+.fg>label{
+  display:block;font-size:12px;color:var(--muted);
+  margin-bottom:6px;font-weight:500;
+}
+.fchips{display:flex;flex-wrap:wrap;gap:6px}
+.fchip{
+  padding:6px 12px;font-size:12px;border-radius:99px;
+  background:var(--tint);color:var(--ink);border:1px solid var(--border);
+  transition:background .15s,color .15s,border-color .15s,transform .12s;
+  font-weight:500;
+}
+.fchip:active{transform:scale(.96)}
+.fchip[aria-pressed="true"]{
+  background:var(--brand);color:var(--onbrand);border-color:var(--brand);
+}
+
+.frange{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center}
+.frange .sep{color:var(--muted);font-size:13px}
+.frange input{margin:0}
+
+.factions{display:flex;gap:8px;margin-top:12px}
+.factions button{flex:1;padding:8px;font-size:13px}

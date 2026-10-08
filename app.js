@@ -1,6 +1,6 @@
 /* ============================================================
    سجل المعاملات — منطق التطبيق
-   الإصدار 6 — شريط قابل للتوسّع + مفتاح دين/سداد + إشارات المبالغ
+   الإصدار 7 — فلاتر متعددة + ترتيب متقدم
    ============================================================ */
 (function () {
 'use strict';
@@ -15,9 +15,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 }[c]));
 
-// أرقام عربية للعرض داخل التطبيق
 const num = n => Number(n).toLocaleString('ar-EG', { maximumFractionDigits: 2 });
-// أرقام لاتينية للصورة (أوضح في المشاركة والطباعة)
 const numImg = n => Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
 
 const uid = () =>
@@ -33,9 +31,9 @@ const nowParts = () => {
 /* ------------------------------------------------------------
    2) ثوابت الصورة
    ------------------------------------------------------------ */
-const IMG_WIDTH = 1080;        // عرض مثالي لواتساب
-const IMG_MAX_ROWS = 15;       // أقصى عدد حركات معروضة
-const PROJECT_NAME = 'مشروع 1'; // ← غيّره لاحقًا
+const IMG_WIDTH = 1080;
+const IMG_MAX_ROWS = 15;
+const PROJECT_NAME = 'مشروع 1';
 
 /* ------------------------------------------------------------
    3) حالة التطبيق
@@ -45,6 +43,73 @@ let cur = null;
 let q = '';
 let type = 'debt';
 let openId = null;
+
+/* ------------------------------------------------------------
+   3.5) حالة الفلاتر
+   ------------------------------------------------------------ */
+const DEFAULT_FILTERS = () => ({
+  sort: 'name',    // name | date-desc | date-asc | amount-desc | amount-asc
+  status: 'all',   // all | debt | paid | credit
+  min: '',         // نص — يُحوَّل عند التطبيق
+  max: ''
+});
+let filters = DEFAULT_FILTERS();
+let fpOpen = false;
+
+function filtersCount() {
+  let n = 0;
+  if (filters.sort !== 'name') n++;
+  if (filters.status !== 'all') n++;
+  if (filters.min !== '' || filters.max !== '') n++;
+  return n;
+}
+
+/** آخر نشاط زمني لمشترٍ (لترتيب حسب التاريخ) */
+function lastActivity(c) {
+  if (!c.transactions.length) return '';
+  let mx = '';
+  for (const t of c.transactions) {
+    const k = (t.date || '') + ' ' + (t.time || '');
+    if (k > mx) mx = k;
+  }
+  return mx;
+}
+
+/** تطبيق الفلاتر والترتيب على قائمة المشترين */
+function applyFilters(list) {
+  let out = list.slice();
+
+  /* --- فلتر الحالة --- */
+  if (filters.status === 'debt')        out = out.filter(c => bal(c) > 0);
+  else if (filters.status === 'paid')   out = out.filter(c => bal(c) === 0);
+  else if (filters.status === 'credit') out = out.filter(c => bal(c) < 0);
+
+  /* --- فلتر نطاق المبلغ (على قيمة المتبقي المطلقة) --- */
+  const min = filters.min === '' ? NaN : parseFloat(filters.min);
+  const max = filters.max === '' ? NaN : parseFloat(filters.max);
+  if (!isNaN(min)) out = out.filter(c => Math.abs(bal(c)) >= min);
+  if (!isNaN(max)) out = out.filter(c => Math.abs(bal(c)) <= max);
+
+  /* --- الترتيب --- */
+  switch (filters.sort) {
+    case 'name':
+      out.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+      break;
+    case 'date-desc':
+      out.sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)));
+      break;
+    case 'date-asc':
+      out.sort((a, b) => lastActivity(a).localeCompare(lastActivity(b)));
+      break;
+    case 'amount-desc':
+      out.sort((a, b) => bal(b) - bal(a));
+      break;
+    case 'amount-asc':
+      out.sort((a, b) => bal(a) - bal(b));
+      break;
+  }
+  return out;
+}
 
 /* ------------------------------------------------------------
    4) التخزين
@@ -146,7 +211,6 @@ function goBack() {
 }
 window.addEventListener('popstate', () => { closeM(); viewList(); });
 
-// آخر 5 بيانات استُخدمت لهذا المشتري (لإدخالها بنقرة واحدة)
 function recentDescs(c) {
   const seen = new Set(), out = [];
   [...c.transactions]
@@ -187,7 +251,6 @@ function wireEntry(c, p, onDone) {
   const am = $(p + 'am'), ds = $(p + 'ds'), sb = $(p + 'sb'), pv = $(p + 'pv');
   const ent = am.closest('.entry');
 
-  // تحديث الألوان والنص والمعاينة (بدون إعادة رسم كي تظهر حركة التبديل)
   const paint = () => {
     ent.dataset.type = type;
     ent.querySelectorAll('.tg-b').forEach(b =>
@@ -230,7 +293,6 @@ function undoAdd(cid, txid, refresh) {
   save(); refresh(); toast('تم التراجع');
 }
 
-// نافذة إضافة حركة سريعة من القائمة
 function quickAdd(id) {
   const c = customers.find(x => x.id === id);
   if (!c) return;
@@ -246,24 +308,50 @@ function quickAdd(id) {
 }
 
 /* ------------------------------------------------------------
-   6) عرض قائمة المشترين
+   6) عرض قائمة المشترين (مع لوحة الفلاتر)
    ------------------------------------------------------------ */
 function viewList() {
   cur = null;
   const owed = customers.reduce((a, c) => a + Math.max(0, bal(c)), 0);
-  const open = customers.filter(c => bal(c) > 0).length;
-  const list = customers.filter(c => c.name.includes(q.trim()));
+  const openCount = customers.filter(c => bal(c) > 0).length;
+
+  const searched = customers.filter(c => c.name.includes(q.trim()));
+  const list = applyFilters(searched);
+  const active = filtersCount();
+
+  /* --- شرائح الترتيب --- */
+  const sortChips = [
+    ['name',        'أبجدي'],
+    ['date-desc',   'الأحدث'],
+    ['date-asc',    'الأقدم'],
+    ['amount-desc', 'المبلغ ⬇'],
+    ['amount-asc',  'المبلغ ⬆']
+  ].map(([v, l]) =>
+    `<button class="fchip" type="button" data-fs="${v}" aria-pressed="${filters.sort === v}">${l}</button>`
+  ).join('');
+
+  /* --- شرائح الحالة --- */
+  const statusChips = [
+    ['all',    'الكل'],
+    ['debt',   'عليهم دين'],
+    ['paid',   'مسدَّد'],
+    ['credit', 'رصيد لهم']
+  ].map(([v, l]) =>
+    `<button class="fchip" type="button" data-fst="${v}" aria-pressed="${filters.status === v}">${l}</button>`
+  ).join('');
 
   $('v').innerHTML = `
     <div class="sum">
       <small>إجمالي المتبقي على المشترين</small>
       <div class="big">${num(owed)}</div>
-      <small>${num(open)} مشترٍ عليهم مبالغ من أصل ${num(customers.length)}</small>
+      <small>${num(openCount)} مشترٍ عليهم مبالغ من أصل ${num(customers.length)}</small>
     </div>
+
     <div class="row">
       <input id="q" type="search" placeholder="ابحث بالاسم" aria-label="بحث" value="${esc(q)}">
       <button class="p" id="add" style="margin-bottom:10px;white-space:nowrap" type="button">+ مشترٍ جديد</button>
     </div>
+
     <div id="af" class="box hide">
       <h3>مشترٍ جديد</h3>
       <input id="nn" placeholder="اسم المشتري" aria-label="اسم المشتري" enterkeyhint="done">
@@ -272,6 +360,35 @@ function viewList() {
         <button class="o" id="cn" type="button">إلغاء</button>
       </div>
     </div>
+
+    <div class="fp${fpOpen ? ' open' : ''}" id="fp">
+      <div class="fp-h" id="fph" role="button" tabindex="0" aria-expanded="${fpOpen}">
+        <span class="t">⚙ الفلاتر والترتيب ${active ? '<span class="c">' + active + '</span>' : ''}</span>
+        <span class="ic" aria-hidden="true">▼</span>
+      </div>
+      <div class="fp-b"><div class="fp-bi"><div>
+        <div class="fg">
+          <label>الترتيب</label>
+          <div class="fchips">${sortChips}</div>
+        </div>
+        <div class="fg">
+          <label>الحالة</label>
+          <div class="fchips">${statusChips}</div>
+        </div>
+        <div class="fg">
+          <label>نطاق المبلغ (المتبقي)</label>
+          <div class="frange">
+            <input id="fmin" type="number" inputmode="decimal" placeholder="من" value="${esc(filters.min)}">
+            <span class="sep">—</span>
+            <input id="fmax" type="number" inputmode="decimal" placeholder="إلى" value="${esc(filters.max)}">
+          </div>
+        </div>
+        <div class="factions">
+          <button class="g" id="freset" type="button">↺ إعادة ضبط</button>
+        </div>
+      </div></div></div>
+    </div>
+
     ${list.length ? '<div class="note" style="margin:0 0 8px">اضغط على المشتري لإظهار «عرض السجل»</div>' : ''}
     ${list.length
       ? list.map(c => {
@@ -297,14 +414,17 @@ function viewList() {
             </div></div></div>
           </div>`;
         }).join('')
-      : '<div class="empty">لا يوجد مشترون هنا.<br>اضغط «مشترٍ جديد» للبدء.</div>'}`;
+      : '<div class="empty">لا يوجد مشترون مطابقون.<br>جرّب تغيير الفلاتر أو البحث.</div>'}`;
 
+  /* --- ربط البحث --- */
   $('q').oninput = e => {
     q = e.target.value;
     const p = e.target.selectionStart;
     viewList();
     const i = $('q'); i.focus(); i.setSelectionRange(p, p);
   };
+
+  /* --- إضافة مشترٍ جديد --- */
   $('add').onclick = () => { $('af').classList.remove('hide'); $('nn').focus(); };
   $('cn').onclick  = () => $('af').classList.add('hide');
   const saveCustomer = () => {
@@ -313,10 +433,69 @@ function viewList() {
     const nc = { id: uid(), name: n, transactions: [] };
     customers.unshift(nc);
     q = '';
-    save(); viewList(); quickAdd(nc.id);   // بعد الإضافة تفتح نافذة الحركة مباشرة
+    save(); viewList(); quickAdd(nc.id);
   };
   $('sv').onclick = saveCustomer;
   $('nn').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); saveCustomer(); } };
+
+  /* --- لوحة الفلاتر: فتح/إغلاق --- */
+  const fp = $('fp'), fph = $('fph');
+  const toggleFp = () => {
+    fpOpen = !fpOpen;
+    fp.classList.toggle('open', fpOpen);
+    fph.setAttribute('aria-expanded', String(fpOpen));
+  };
+  fph.onclick = toggleFp;
+  fph.onkeydown = e => {
+    if (e.target === fph && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault(); toggleFp();
+    }
+  };
+
+  /* --- شرائح الترتيب --- */
+  document.querySelectorAll('[data-fs]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    filters.sort = b.dataset.fs;
+    viewList();
+    fpOpen = true; // ابقَ اللوحة مفتوحة
+    const nf = $('fp'); if (nf) nf.classList.add('open');
+  });
+
+  /* --- شرائح الحالة --- */
+  document.querySelectorAll('[data-fst]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    filters.status = b.dataset.fst;
+    viewList();
+    fpOpen = true;
+    const nf = $('fp'); if (nf) nf.classList.add('open');
+  });
+
+  /* --- نطاق المبلغ: تحديث عند change/blur للحفاظ على التركيز --- */
+  const fmin = $('fmin'), fmax = $('fmax');
+  const commitAmount = () => {
+    filters.min = fmin ? fmin.value.trim() : '';
+    filters.max = fmax ? fmax.value.trim() : '';
+    viewList();
+    fpOpen = true;
+    const nf = $('fp'); if (nf) nf.classList.add('open');
+  };
+  if (fmin) fmin.onchange = commitAmount;
+  if (fmax) fmax.onchange = commitAmount;
+  [fmin, fmax].forEach(el => el && (el.onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+  }));
+
+  /* --- إعادة ضبط --- */
+  const freset = $('freset');
+  if (freset) freset.onclick = e => {
+    e.stopPropagation();
+    filters = DEFAULT_FILTERS();
+    viewList();
+    fpOpen = true;
+    const nf = $('fp'); if (nf) nf.classList.add('open');
+  };
+
+  /* --- بطاقات المشترين --- */
   document.querySelectorAll('.cust').forEach(card => {
     const toggle = () => {
       const willOpen = !card.classList.contains('open');
@@ -460,8 +639,6 @@ function viewDetail(id, focusAmount) {
 /* ============================================================
    8) توليد صورة السجل
    ============================================================ */
-
-/** مستطيل بأطراف دائرية */
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -472,7 +649,6 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-/** اقتطاع النص ليتسع داخل عرض محدد */
 function truncateText(ctx, text, maxWidth) {
   if (ctx.measureText(text).width <= maxWidth) return text;
   let lo = 0, hi = text.length;
@@ -484,7 +660,6 @@ function truncateText(ctx, text, maxWidth) {
   return text.slice(0, lo) + '…';
 }
 
-/** التأكد من تحميل الخط قبل الرسم */
 async function ensureFonts() {
   if (!document.fonts || !document.fonts.load) return;
   try {
@@ -497,11 +672,9 @@ async function ensureFonts() {
   } catch (e) {}
 }
 
-/** توليد صورة PNG للسجل، وإرجاع Blob */
 async function generateLedgerImage(customer) {
   await ensureFonts();
 
-  /* -- ترتيب زمني (الأقدم أولًا) لحساب الرصيد المتراكم -- */
   const sorted = [...customer.transactions].sort((a, b) =>
     (a.date + a.time).localeCompare(b.date + b.time)
   );
@@ -513,11 +686,10 @@ async function generateLedgerImage(customer) {
   });
 
   const total = withBalance.length;
-  const rowsShown = withBalance.slice(-IMG_MAX_ROWS); // آخر 15 (الأحدث)
+  const rowsShown = withBalance.slice(-IMG_MAX_ROWS);
   const hidden = Math.max(0, total - IMG_MAX_ROWS);
   const finalBalance = cum;
 
-  /* -- الألوان (أخضر مائي + أبيض) -- */
   const C = {
     bg:        '#ffffff',
     ink:       '#1a1a1a',
@@ -529,7 +701,6 @@ async function generateLedgerImage(customer) {
     pay:       '#26734a'
   };
 
-  /* -- أبعاد -- */
   const PAD = 50;
   const W = IMG_WIDTH;
   const H_HEADER     = 100;
@@ -544,7 +715,6 @@ async function generateLedgerImage(customer) {
     PAD + H_HEADER + H_NAME + H_BALANCE + H_TABLE_HEAD +
     (rowsShown.length * H_ROW) + H_HIDDEN + H_FOOTER + PAD;
 
-  /* -- تحضير Canvas بدقة عالية -- */
   const dpr = Math.max(2, window.devicePixelRatio || 1);
   const canvas = document.createElement('canvas');
   canvas.width  = W * dpr;
@@ -552,7 +722,6 @@ async function generateLedgerImage(customer) {
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
 
-  /* -- الخلفية -- */
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, W, height);
 
@@ -561,27 +730,22 @@ async function generateLedgerImage(customer) {
   const centerX = W / 2;
   let y = PAD;
 
-  /* -- التواريخ -- */
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-CA');
   const timeStr = now.toTimeString().slice(0, 5);
 
-  /* ===== 1. الرأس ===== */
+  /* 1. الرأس */
   ctx.textBaseline = 'middle';
-
-  // اسم المشروع (يمين)
   ctx.fillStyle = C.brand;
   ctx.textAlign = 'right';
   ctx.font = '700 46px Tajawal, Tahoma, sans-serif';
   ctx.fillText(PROJECT_NAME, rightX, y + H_HEADER / 2);
 
-  // التاريخ والوقت (يسار)
   ctx.fillStyle = C.muted;
   ctx.textAlign = 'left';
   ctx.font = '400 22px Tajawal, Tahoma, sans-serif';
   ctx.fillText(dateStr + '  •  ' + timeStr, leftX, y + H_HEADER / 2);
 
-  // خط فاصل
   y += H_HEADER;
   ctx.strokeStyle = C.border;
   ctx.lineWidth = 1.5;
@@ -590,7 +754,7 @@ async function generateLedgerImage(customer) {
   ctx.lineTo(W - PAD, y);
   ctx.stroke();
 
-  /* ===== 2. اسم المشتري ===== */
+  /* 2. اسم المشتري */
   ctx.textAlign = 'right';
   ctx.fillStyle = C.muted;
   ctx.font = '500 22px Tajawal, Tahoma, sans-serif';
@@ -606,29 +770,25 @@ async function generateLedgerImage(customer) {
 
   y += H_NAME;
 
-  /* ===== 3. صندوق الرصيد ===== */
+  /* 3. صندوق الرصيد */
   const isDebtor = finalBalance > 0;
   const isCredit = finalBalance < 0;
   const balColor = isDebtor ? C.debt : C.pay;
   const balLabel = isDebtor ? 'المتبقي عليه' : (isCredit ? 'رصيد له' : 'مسدَّد');
 
-  // خلفية الصندوق
   ctx.fillStyle = C.brandTint;
   roundRect(ctx, PAD, y, W - PAD * 2, H_BALANCE - 30, 22);
   ctx.fill();
 
-  // التسمية
   ctx.fillStyle = C.muted;
   ctx.textAlign = 'right';
   ctx.font = '500 26px Tajawal, Tahoma, sans-serif';
   ctx.fillText(balLabel, rightX - 35, y + 55);
 
-  // عدد الحركات
   ctx.textAlign = 'left';
   ctx.font = '400 22px Tajawal, Tahoma, sans-serif';
   ctx.fillText('إجمالي الحركات: ' + total, leftX + 35, y + 55);
 
-  // الرقم الكبير (مع تصغير تلقائي إن كان طويلًا)
   const balText = isDebtor ? '−' + numImg(finalBalance) : numImg(Math.abs(finalBalance));
   const maxBalW = W - PAD * 2 - 70;
   let balFontSize = 84;
@@ -644,19 +804,17 @@ async function generateLedgerImage(customer) {
 
   y += H_BALANCE;
 
-  /* ===== 4. الجدول ===== */
+  /* 4. الجدول */
   const CONTENT_W = W - PAD * 2;
   const COL_DATE_W    = 200;
   const COL_AMOUNT_W  = 200;
   const COL_NOTES_W   = 320;
-  const COL_BAL_W     = CONTENT_W - COL_DATE_W - COL_AMOUNT_W - COL_NOTES_W;
 
   const colDateRight    = W - PAD;
   const colAmountRight  = colDateRight   - COL_DATE_W;
   const colNotesRight   = colAmountRight - COL_AMOUNT_W;
   const colBalRight     = colNotesRight  - COL_NOTES_W;
 
-  /* --- رأس الجدول --- */
   ctx.fillStyle = C.brand;
   roundRect(ctx, PAD, y, CONTENT_W, H_TABLE_HEAD, 14);
   ctx.fill();
@@ -673,44 +831,37 @@ async function generateLedgerImage(customer) {
 
   y += H_TABLE_HEAD;
 
-  /* --- صفوف الجدول --- */
   rowsShown.forEach((t, i) => {
     const rowY = y + i * H_ROW;
     const cy   = rowY + H_ROW / 2;
 
-    // تخطيط متعرج
     if (i % 2 === 1) {
       ctx.fillStyle = '#fafbfb';
       ctx.fillRect(PAD, rowY, CONTENT_W, H_ROW);
     }
 
-    // التاريخ
     ctx.fillStyle = C.ink;
     ctx.textAlign = 'right';
     ctx.font = '400 22px Tajawal, Tahoma, sans-serif';
     ctx.fillText(t.date, colDateRight - 15, cy);
 
-    // المبلغ (مع إشارة + أو −)
     const amtColor = t.type === 'debt' ? C.debt : C.pay;
     const amtSign  = t.type === 'debt' ? '−' : '';
     ctx.fillStyle = amtColor;
     ctx.font = '700 26px Tajawal, Tahoma, sans-serif';
     ctx.fillText(amtSign + numImg(t.amount), colAmountRight - 15, cy);
 
-    // الملاحظات (مع اقتطاع)
     ctx.fillStyle = C.muted;
     ctx.font = '400 20px Tajawal, Tahoma, sans-serif';
     const notes = t.desc ? truncateText(ctx, t.desc, COL_NOTES_W - 30) : '—';
     ctx.textAlign = 'right';
     ctx.fillText(notes, colNotesRight - 15, cy);
 
-    // الرصيد المتراكم
     ctx.fillStyle = t.balance > 0 ? C.debt : (t.balance < 0 ? C.pay : C.muted);
     ctx.font = '500 24px Tajawal, Tahoma, sans-serif';
     ctx.textAlign = 'right';
     ctx.fillText((t.balance > 0 ? '−' : '') + numImg(Math.abs(t.balance)), colBalRight - 15, cy);
 
-    // خط فاصل بين الصفوف
     if (i < rowsShown.length - 1) {
       ctx.strokeStyle = C.border;
       ctx.lineWidth = 1;
@@ -723,7 +874,6 @@ async function generateLedgerImage(customer) {
 
   y += rowsShown.length * H_ROW;
 
-  /* --- سطر "الحركات المخفية" --- */
   if (hidden > 0) {
     ctx.fillStyle = C.muted;
     ctx.textAlign = 'center';
@@ -732,7 +882,7 @@ async function generateLedgerImage(customer) {
     y += H_HIDDEN;
   }
 
-  /* ===== 5. التذييل ===== */
+  /* 5. التذييل */
   ctx.strokeStyle = C.border;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
@@ -750,7 +900,6 @@ async function generateLedgerImage(customer) {
   ctx.font = '400 20px Tajawal, Tahoma, sans-serif';
   ctx.fillText('طُبعت في ' + dateStr + ' الساعة ' + timeStr, leftX, y + 65);
 
-  /* ===== تحويل إلى Blob ===== */
   return new Promise((resolve, reject) => {
     canvas.toBlob(blob => {
       if (blob) resolve(blob);
@@ -805,7 +954,6 @@ async function showLedgerImage(id) {
   const mc = document.querySelector('#m .mc');
   if (mc) { mc.style.maxWidth = '520px'; mc.style.padding = '16px'; }
 
-  /* -- مشاركة -- */
   $('sh').onclick = async () => {
     try {
       const file = new File([blob], filename, { type: 'image/png' });
@@ -820,11 +968,10 @@ async function showLedgerImage(id) {
       }
       toast('المشاركة غير مدعومة على هذا الجهاز');
     } catch (e) {
-      // المستخدم ألغى — لا نفعل شيئًا
+      // المستخدم ألغى
     }
   };
 
-  /* -- تنزيل -- */
   $('dl').onclick = () => {
     const a = document.createElement('a');
     a.href = url;
@@ -835,7 +982,6 @@ async function showLedgerImage(id) {
     toast('تم التنزيل — راجع الصور أو التنزيلات');
   };
 
-  /* -- تنظيف -- */
   $('ok').onclick = () => {
     URL.revokeObjectURL(url);
     closeM();
